@@ -1,0 +1,3 @@
+shell: |
+  echo "Starting native build checks..."
+  nix flake check
