@@ -63,6 +63,7 @@
               nixFork.packages.${system}.nix
               pkgs.radicle-node
               pkgs.radicle-tui
+              pkgs.jujutsu
             ];
           };
         }
