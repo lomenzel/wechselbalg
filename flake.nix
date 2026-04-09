@@ -61,6 +61,8 @@
           default = pkgs.mkShell {
             buildInputs = [
               nixFork.packages.${system}.nix
+              pkgs.radicle-node
+              pkgs.radicle-tui
             ];
           };
         }
