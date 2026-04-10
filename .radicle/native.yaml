@@ -1,3 +1,3 @@
 shell: |
   echo "Starting native build checks..."
-  nix flake check
+  nix run github:lomenzel/nix -- flake check
