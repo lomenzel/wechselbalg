@@ -120,4 +120,16 @@
     params = { x = "hi"; };
     expected.toBe = "string";
   }
+  {
+    description = "partially applied primop (builtins.lessThan 1)";
+    func = builtins.lessThan 1;
+    params = 5;
+    expected.toBe = true;
+  }
+  {
+    description = "partially applied primop (builtins.lessThan 1, false)";
+    func = builtins.lessThan 1 ;
+    params = 0;
+    expected.toBe = false;
+  }
 ]

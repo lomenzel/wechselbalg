@@ -50,23 +50,6 @@ let
           (builtins.attrNames entries);
       in
       "Value::fromSet({${join ", " pairs}})";
-
-    renderRecAttrs = entries:
-      let
-        names = builtins.attrNames entries;
-        assignments = builtins.map
-          (name: ''__rec[${builtins.toJSON name}] = ${entries.${name}};'')
-          names;
-      in
-      ''([=]() -> Value {
-  Value::Set __rec;
-  ${join "\n  " assignments}
-  return Value::fromSet(std::move(__rec));
-}())'';
-
-    # ── Laziness ────────────────────────────────────────────────
-    renderThunk = body: "Value::thunk([=]() -> Value { return ${body}; })";
-
     # ── Lazy attrset (entries evaluated on first access) ────────
     renderLazyAttrs = entries:
       let
@@ -107,31 +90,14 @@ let
     # ── Control flow ────────────────────────────────────────────
     renderIf = cond: then_: else_: "(${cond}.asBool() ? ${then_} : ${else_})";
 
-    # ── Boolean ops ─────────────────────────────────────────────
-    renderNot = value: "Value::fromBool(!${value}.asBool())";
-    renderAnd = a: b: "Value::fromBool(${a}.asBool() && ${b}.asBool())";
-    renderOr = a: b: "Value::fromBool(${a}.asBool() || ${b}.asBool())";
-    renderImplies = a: b: "Value::fromBool(!${a}.asBool() || ${b}.asBool())";
-
-    # ── Comparison ──────────────────────────────────────────────
+    # ── Comparison ──────────────────────────────────────────────────
     renderEq = a: b: "Value::fromBool(${a} == ${b})";
-    renderNeq = a: b: "Value::fromBool(!(${a} == ${b}))";
     renderLessThan = a: b: "Value::fromBool(${a} < ${b})";
 
     # ── Arithmetic ──────────────────────────────────────────────
     renderAdd = a: b: "__wb_add(${a}, ${b})";
-    renderSub = a: b: "__wb_sub(${a}, ${b})";
-    renderMul = a: b: "__wb_mul(${a}, ${b})";
-    renderDiv = a: b: "__wb_div(${a}, ${b})";
 
-    # ── String / collection ops ─────────────────────────────────
-    renderConcatStrings = parts:
-      if builtins.length parts == 0 then ''Value::fromString("")''
-      else builtins.foldl'
-        (acc: p: "__wb_add(${acc}, ${p})")
-        (builtins.head parts)
-        (builtins.tail parts);
-
+    # Collection ops
     renderUpdate = base: ext: "${base}.update(${ext})";
     renderConcatLists = a: b: "${a}.concat(${b})";
 
@@ -146,13 +112,6 @@ let
   try { return ${expr}${access}; }
   catch(...) { return ${default}; }
 }())'';
-
-    # ── Primop application ──────────────────────────────────────
-    renderPrimopApp = primopCode: args:
-      builtins.foldl'
-        (acc: arg: "(${acc})(${arg})")
-        "(${primopCode})"
-        args;
 
     # ── Function definitions ────────────────────────────────────
     renderParams = params: params;

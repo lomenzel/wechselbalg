@@ -254,6 +254,28 @@ let
       # Paths are impure — we cannot evaluate them at compile time in wechselbalg
       { success = false; value = null; }
 
+    else if _expr == "hasAttr" then
+      let
+        exprEval = eval value.expression;
+        pathEval = builtins.map (p: eval p) value.path;
+        success = exprEval.success && builtins.all (p: p.success) pathEval;
+      in
+      {
+        inherit success;
+        value =
+          if success then
+            (builtins.foldl'
+              (acc: pe:
+                if !acc.continue then acc
+                else if builtins.isAttrs acc.cur && builtins.hasAttr pe.value acc.cur
+                then { continue = true; cur = acc.cur.${pe.value}; }
+                else { continue = false; cur = null; })
+              { continue = true; cur = exprEval.value; }
+              pathEval
+            ).continue
+          else null;
+      }
+
     else if _expr == "primop" || _expr == "primopApp" then
       { success = false; value = null; }
 

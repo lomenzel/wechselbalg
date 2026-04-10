@@ -18,4 +18,16 @@
     params = { n = 42; };
     expected.toBe = "count: 42";
   }
+  {
+    description = "triple string concatenation";
+    func = params: params.a + params.b + params.c;
+    params = { a = "one"; b = "two"; c = "three"; };
+    expected.toBe = "onetwothree";
+  }
+  {
+    description = "mixed interpolation and concat";
+    func = params: "${params.a}-${params.b}" + params.c;
+    params = { a = "x"; b = "y"; c = "z"; };
+    expected.toBe = "x-yz";
+  }
 ]

@@ -104,6 +104,26 @@ let
         # Primops reify as { _expr = "primop"; value = "name"; }
         if ast._expr == "primop" then
           { ir = ir.primop ast.value; defs = {}; inherit known; }
+
+        # Partially-applied primops (e.g. `builtins.lessThan 1`)
+        else if ast._expr == "primopApp" then
+          let
+            argsResult = builtins.foldl'
+              (acc: arg:
+                let r = walkValue arg acc.known;
+                in {
+                  args = acc.args ++ [ r.ir ];
+                  defs = mergeDefs acc.defs r.defs;
+                  known = r.known;
+                })
+              { args = []; defs = {}; inherit known; }
+              ast.value.appliedArgs;
+          in
+          {
+            ir = ir.primopApp ast.value.primop argsResult.args;
+            inherit (argsResult) defs known;
+          }
+
         else
         let
           name = util.freshFuncName known;
@@ -292,6 +312,44 @@ let
         ir = ir.implies aR.ir bR.ir;
         defs = mergeDefs aR.defs bR.defs;
         known = bR.known;
+      }
+
+    else if ast._expr == "hasAttr" then
+      # Nix `e ? a.b.c` — check whether the full attribute path exists.
+      # Desugared to: hasAttr "a" e && hasAttr "b" e.a && hasAttr "c" e.a.b
+      # using the existing hasAttr primop (no new IR node needed).
+      let
+        exprR = walkAST ast.value.expression known;
+        pathR = builtins.foldl'
+          (acc: p:
+            let r = walkAST p acc.known;
+            in {
+              path = acc.path ++ [ r.ir ];
+              defs = mergeDefs acc.defs r.defs;
+              known = r.known;
+            })
+          { path = []; defs = exprR.defs; known = exprR.known; }
+          ast.value.path;
+
+        # Build chained check: hasAttr(p0, e) && hasAttr(p1, e.p0) && ...
+        checks = builtins.genList (i:
+          let
+            elem = builtins.elemAt pathR.path i;
+            prefix = builtins.genList (j: builtins.elemAt pathR.path j) i;
+            base = if prefix == [] then exprR.ir else ir.select exprR.ir prefix;
+          in
+          ir.primopApp "hasAttr" [ elem base ]
+        ) (builtins.length pathR.path);
+
+        finalIR = builtins.foldl'
+          (acc: check: if acc == null then check else ir.and_ acc check)
+          null
+          checks;
+      in
+      {
+        ir = finalIR;
+        defs = pathR.defs;
+        known = pathR.known;
       }
 
     else if ast._expr == "equals" then

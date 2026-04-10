@@ -42,4 +42,16 @@
     params = { a = 2; b = 3; c = 4; };
     expected.toBe = 20;
   }
+  {
+    description = "chained addition (3 operands)";
+    func = params: params.a + params.b + params.c;
+    params = { a = 1; b = 2; c = 3; };
+    expected.toBe = 6;
+  }
+  {
+    description = "addition and subtraction mixed";
+    func = params: params.a + params.b - params.c;
+    params = { a = 10; b = 5; c = 3; };
+    expected.toBe = 12;
+  }
 ]

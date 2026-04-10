@@ -40,19 +40,6 @@ let
           (builtins.attrNames entries);
       in
       "{ ${join " " pairs} }";
-
-    renderRecAttrs = entries:
-      let
-        pairs = builtins.map
-          (name: "${builtins.toJSON name} = ${entries.${name}};")
-          (builtins.attrNames entries);
-      in
-      "rec { ${join " " pairs} }";
-
-    # ── Laziness ────────────────────────────────────────────────
-    # Nix is already lazy, so thunks are just the body expression.
-    renderThunk = body: body;
-
     # ── Lazy attrset (entries evaluated on first access) ────────
     # Nix attrsets are already lazy, so this is just a regular attrset.
     renderLazyAttrs = entries:
@@ -86,32 +73,14 @@ let
     # ── Control flow ────────────────────────────────────────────
     renderIf = cond: then_: else_: "(if ${cond} then ${then_} else ${else_})";
 
-    # ── Boolean ops ─────────────────────────────────────────────
-    renderNot = value: "(! ${value})";
-    renderAnd = a: b: "(${a} && ${b})";
-    renderOr = a: b: "(${a} || ${b})";
-    renderImplies = a: b: "(${a} -> ${b})";
-
-    # ── Comparison ──────────────────────────────────────────────
+    # ── Comparison ──────────────────────────────────────────────────
     renderEq = a: b: "(${a} == ${b})";
-    renderNeq = a: b: "(${a} != ${b})";
     renderLessThan = a: b: "(${a} < ${b})";
 
     # ── Arithmetic ──────────────────────────────────────────────
     renderAdd = a: b: "(${a} + ${b})";
-    renderSub = a: b: "(${a} - ${b})";
-    renderMul = a: b: "(${a} * ${b})";
-    renderDiv = a: b: "(${a} / ${b})";
 
-    # ── String / collection ops ─────────────────────────────────
-    renderConcatStrings = parts:
-      if builtins.length parts == 0 then ''""''
-      else if builtins.length parts == 1 then builtins.head parts
-      else builtins.foldl'
-        (acc: p: "(${acc} + ${p})")
-        (builtins.head parts)
-        (builtins.tail parts);
-
+    # Collection ops
     renderUpdate = base: ext: "(${base} // ${ext})";
     renderConcatLists = a: b: "(${a} ++ ${b})";
 
@@ -129,13 +98,6 @@ let
         access
       else
         "(let __v = builtins.tryEval ${access}; in if __v.success then __v.value else ${default})";
-
-    # ── Primop application ──────────────────────────────────────
-    renderPrimopApp = primopCode: args:
-      builtins.foldl'
-        (acc: arg: "(${acc} ${arg})")
-        "(${primopCode})"
-        args;
 
     # ── Function definitions ────────────────────────────────────
     renderParams = params: params;

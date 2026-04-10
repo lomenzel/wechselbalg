@@ -6,7 +6,7 @@
 # Constructors are plain functions returning attrsets.
 # No dependencies — this file is entirely self-contained.
 
-{
+rec {
   # ── Literals ──────────────────────────────────────────────────────
   int = value: { _t = "int"; inherit value; };
   float = value: { _t = "float"; inherit value; };
@@ -17,16 +17,6 @@
   # ── Collections ───────────────────────────────────────────────────
   list = elements: { _t = "list"; inherit elements; };
   attrs = entries: { _t = "attrs"; inherit entries; };
-
-  # Recursive attrset — bindings can reference each other by name.
-  # `entries` is { name = ir-node; ... } where nodes may contain
-  # refs back to sibling names.
-  recAttrs = entries: { _t = "rec-attrs"; inherit entries; };
-
-  # ── Laziness ──────────────────────────────────────────────────────
-  # A thunk wraps a computation that should be deferred.
-  # Backends decide how to lower it (getter, lambda, co_yield, …).
-  thunk = body: { _t = "thunk"; inherit body; };
 
   # ── Functions ─────────────────────────────────────────────────────
 
@@ -46,23 +36,24 @@
   if_ = cond: then_: else_: { _t = "if"; inherit cond then_ else_; };
 
   # ── Operators ─────────────────────────────────────────────────────
-  # Binary ops
   add = a: b: { _t = "add"; inherit a b; };
-  sub = a: b: { _t = "sub"; inherit a b; };
-  mul = a: b: { _t = "mul"; inherit a b; };
-  div = a: b: { _t = "div"; inherit a b; };
 
   eq = a: b: { _t = "eq"; inherit a b; };
-  neq = a: b: { _t = "neq"; inherit a b; };
+  neq = a: b: not_ (eq a b);
   lessThan = a: b: { _t = "lessThan"; inherit a b; };
 
-  and_ = a: b: { _t = "and"; inherit a b; };
-  or_ = a: b: { _t = "or"; inherit a b; };
-  implies = a: b: { _t = "implies"; inherit a b; };
-  not_ = value: { _t = "not"; inherit value; };
+  # Composed — lowered to if_ at IR construction time.
+  # Backends only need to implement renderIf.
+  not_ = value: if_ value (bool false) (bool true);
+  and_ = a: b: if_ a b (bool false);
+  or_ = a: b: if_ a (bool true) b;
+  implies = a: b: if_ a b (bool true);
 
-  # String concatenation (list of IR nodes to join)
-  concatStrings = parts: { _t = "concatStrings"; inherit parts; };
+  # Composed — Nix `+` is overloaded (string concat + numeric add).
+  # Lowered to chained `add` at IR construction time.
+  concatStrings = parts:
+    if parts == [] then string ""
+    else builtins.foldl' (acc: p: add acc p) (builtins.head parts) (builtins.tail parts);
 
   # Attrset update (//)
   update = base: ext: { _t = "update"; inherit base ext; };
@@ -79,8 +70,9 @@
   # Backends provide the implementation.
   primop = name: { _t = "primop"; inherit name; };
 
-  # Primop partially applied with some already-evaluated args
-  primopApp = name: args: { _t = "primopApp"; inherit name args; };
+  # Composed — lowered to chained apply at IR construction time.
+  # Backends only need to implement renderApply + primops.
+  primopApp = name: args: builtins.foldl' (fn: arg: apply fn arg) (primop name) args;
 
   # ── Let bindings ──────────────────────────────────────────────────
   # Nix `let` introduces a (potentially recursive) scope.

@@ -45,23 +45,6 @@ let
           (builtins.attrNames entries);
       in
       "Value.fromSet({${join ", " pairs}})";
-
-    renderRecAttrs = entries:
-      let
-        names = builtins.attrNames entries;
-        assignments = builtins.map
-          (name: "__rec[${builtins.toJSON name}] = ${entries.${name}};")
-          names;
-      in
-      ''(() => {
-  const __rec = {};
-  ${join "\n  " assignments}
-  return Value.fromSet(__rec);
-})()'';
-
-    # ── Laziness ────────────────────────────────────────────────
-    renderThunk = body: "Value.thunk(() => ${body})";
-
     # ── Lazy attrset (entries evaluated on first access) ────────
     renderLazyAttrs = entries:
       let
@@ -100,31 +83,14 @@ let
     # ── Control flow ────────────────────────────────────────────
     renderIf = cond: then_: else_: "(${cond}.asBool() ? ${then_} : ${else_})";
 
-    # ── Boolean ops ─────────────────────────────────────────────
-    renderNot = value: "${value}.negate()";
-    renderAnd = a: b: "Value.fromBool(${a}.asBool() && ${b}.asBool())";
-    renderOr = a: b: "Value.fromBool(${a}.asBool() || ${b}.asBool())";
-    renderImplies = a: b: "Value.fromBool(!${a}.asBool() || ${b}.asBool())";
-
-    # ── Comparison ──────────────────────────────────────────────
+    # ── Comparison ──────────────────────────────────────────────────
     renderEq = a: b: "${a}.eq(${b})";
-    renderNeq = a: b: "Value.fromBool(!Value._deepEq(${a}, ${b}))";
     renderLessThan = a: b: "${a}.lessThan(${b})";
 
     # ── Arithmetic ──────────────────────────────────────────────
     renderAdd = a: b: "${a}.add(${b})";
-    renderSub = a: b: "${a}.sub(${b})";
-    renderMul = a: b: "${a}.mul(${b})";
-    renderDiv = a: b: "${a}.div(${b})";
 
-    # ── String / collection ops ─────────────────────────────────
-    renderConcatStrings = parts:
-      if builtins.length parts == 0 then ''Value.fromString("")''
-      else builtins.foldl'
-        (acc: p: "${acc}.add(${p})")
-        (builtins.head parts)
-        (builtins.tail parts);
-
+    # Collection ops
     renderUpdate = base: ext: "${base}.update(${ext})";
     renderConcatLists = a: b: "${a}.concat(${b})";
 
@@ -142,13 +108,6 @@ let
   try { return ${access}; }
   catch(_) { return ${default}; }
 })()'';
-
-    # ── Primop application ──────────────────────────────────────
-    renderPrimopApp = primopCode: args:
-      builtins.foldl'
-        (acc: arg: "${acc}.call(${arg})")
-        "(${primopCode})"
-        args;
 
     # ── Function definitions ────────────────────────────────────
     renderParams = params: params;
