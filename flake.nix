@@ -64,6 +64,7 @@
               pkgs.radicle-node
               pkgs.radicle-tui
               pkgs.jujutsu
+              pkgs.radicle-desktop
             ];
           };
         }
