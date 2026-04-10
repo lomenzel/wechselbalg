@@ -1,5 +1,5 @@
 {
-  description = "Wechselbalg — translate pure Nix values to JavaScript, C++, Nix, and more";
+  description = "Wechselbalg — translate Nix values to JavaScript, C++, Nix, and more";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs";
     treefmt.url = "github:numtide/treefmt-nix";
@@ -61,10 +61,6 @@
           default = pkgs.mkShell {
             buildInputs = [
               nixFork.packages.${system}.nix
-              pkgs.radicle-node
-              pkgs.radicle-tui
-              pkgs.jujutsu
-              pkgs.radicle-desktop
             ];
           };
         }
