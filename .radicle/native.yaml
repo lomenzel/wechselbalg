@@ -2,4 +2,3 @@ shell: |
   echo "Starting native build checks..."
   nix run github:lomenzel/nix -- flake check
   echo "finished"
-  exit 1
