@@ -233,6 +233,8 @@ class Value:
     # ── Call ───────────────────────────────────────────────────────
 
     def call(self, arg: "Value") -> "Value":
+        if self.type == "set" and "__functor" in self.value:
+            return self.value["__functor"].call(self).call(arg)
         if self.type != "lambda":
             raise RuntimeError(f"wechselbalg: tried to call a {self.type}")
         return self.value(arg)

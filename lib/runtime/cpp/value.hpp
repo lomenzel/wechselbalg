@@ -169,6 +169,12 @@ struct Value {
 
   Value operator()(Value arg) const {
     force();
+    if (type == Type::Set) {
+      auto& s = std::get<Set>(value);
+      auto it = s.find("__functor");
+      if (it != s.end())
+        return it->second(*this)(std::move(arg));
+    }
     if (type != Type::Lambda)
       throw std::runtime_error("wechselbalg: tried to call a " + typeOf());
     return std::get<Func>(value)(std::move(arg));
