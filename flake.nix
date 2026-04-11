@@ -3,7 +3,7 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs";
     treefmt.url = "github:numtide/treefmt-nix";
-    nixFork.url = "git+file:///home/leonard/Projekte/nix";
+    nixFork.url = "github:lomenzel/nix";
   };
   outputs =
     {
