@@ -23,7 +23,7 @@
             inherit system;
             pkgs = import nixpkgs {
               inherit system;
-              overlays = [ self.overlay ];
+              overlays = [ self.overlays.default ];
             };
           }
         );
@@ -31,7 +31,7 @@
     {
       lib = import ./lib;
 
-      overlay =
+      overlays.default =
         final: prev:
 
         {
