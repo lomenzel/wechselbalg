@@ -39,9 +39,6 @@ let
     else if node._t == "attrs" then
       backend.renderAttrs (builtins.mapAttrs (_: renderNode backend) node.entries)
 
-    else if node._t == "lazy-attrs" then
-      backend.renderLazyAttrs (builtins.mapAttrs (_: renderNode backend) node.entries)
-
     else if node._t == "let" then
       let
         renderedBindings = builtins.mapAttrs (_: renderNode backend) node.bindings;
@@ -92,6 +89,8 @@ let
     else if node._t == "primop" then
       if builtins.hasAttr node.name backend.primops
       then backend.primops.${node.name}
+      else if builtins.hasAttr "renderUnknownPrimop" backend
+      then builtins.trace "wechselbalg warning: primop '${node.name}' is not implemented in ${backend.name} — will throw at runtime" (backend.renderUnknownPrimop node.name)
       else throw "wechselbalg: backend '${backend.name}' does not implement primop '${node.name}'"
 
     else

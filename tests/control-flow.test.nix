@@ -21,4 +21,20 @@
     params = { x = 2; };
     expected.toBe = "two";
   }
+
+  # ── assert expressions ─────────────────────────────────────
+  {
+    description = "assert true passes through";
+    func = params: assert params > 0; params + 1;
+    params = 5;
+    expected.toBe = 6;
+  }
+  {
+    description = "assert with computed condition";
+    func = params:
+      let x = params * 2;
+      in assert x > 0; x;
+    params = 3;
+    expected.toBe = 6;
+  }
 ]

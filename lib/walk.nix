@@ -23,6 +23,20 @@ let
   # Merges two walk results, combining defs and keeping the later known.
   mergeDefs = a: b: a // b;
 
+  # ── Split defs by hoistability ──────────────────────────────────
+  # Separates defs into { hoistable; local; }.
+  # Hoistable defs (from walkValue — fully self-contained, closure vars
+  # resolved) can safely propagate out of let/lambda scopes.
+  # Local defs (from walkAST — may reference scope-bound variables by
+  # name) must stay in their enclosing scope.
+  splitDefs = defs:
+    let names = builtins.attrNames defs;
+    in builtins.foldl' (acc: name:
+      if (defs.${name}._hoistable or false)
+      then { hoistable = acc.hoistable // { ${name} = defs.${name}; }; inherit (acc) local; }
+      else { inherit (acc) hoistable; local = acc.local // { ${name} = defs.${name}; }; }
+    ) { hoistable = {}; local = {}; } names;
+
   # ── Find a lambda we've already seen ────────────────────────────
   # Returns the name if `fn` was already registered in `known`, else null.
   findSameFunction = fn: known:
@@ -40,7 +54,9 @@ let
     match;
 
   # ── Walk a Nix value (already evaluated) ────────────────────────
-  walkValue = value: known:
+  # seenSets: attrset of fingerprints of ancestor attrsets being walked.
+  # Used to detect circular attrset references (e.g. functor.type in nixpkgs).
+  walkValue = value: known: seenSets:
     let
       type = builtins.typeOf value;
       _ = purity.assertPure value;
@@ -64,7 +80,7 @@ let
       let
         result = builtins.foldl'
           (acc: elem:
-            let r = walkValue elem acc.known;
+            let r = walkValue elem acc.known seenSets;
             in {
               elements = acc.elements ++ [ r.ir ];
               defs = mergeDefs acc.defs r.defs;
@@ -78,9 +94,44 @@ let
     else if type == "set" then
       let
         names = builtins.attrNames value;
+        # Build a fingerprint that includes distinguishing string values
+        # (not just key names) to avoid false-positive cycle detection
+        # for structurally similar attrsets (e.g. nixpkgs type objects
+        # all have the same keys but different "name" values).
+        distinguishers = builtins.concatStringsSep "|" (builtins.filter (s: s != "") (builtins.map (n:
+          let try = builtins.tryEval (
+            if builtins.isString value.${n} then "${n}=${value.${n}}"
+            else ""
+          ); in if try.success then try.value else ""
+        ) (builtins.filter (n: builtins.elem n ["name" "_type" "description"]) names)));
+        fingerprint = builtins.concatStringsSep "," names
+          + (if distinguishers != "" then "#${distinguishers}" else "");
+      in
+      if builtins.hasAttr fingerprint seenSets then
+        # Circular attrset reference detected — emit a lazy attrset with
+        # runtime throws for each entry.  Throws are deferred because
+        # attrs entries are lazy — they only fire when accessed.
+        {
+          ir = ir.attrs (builtins.listToAttrs (builtins.map (name: {
+            inherit name;
+            value = ir.primopApp "throw" [ (ir.string "wechselbalg: circular attrset reference at '${name}' (keys: ${fingerprint})") ];
+          }) names));
+          defs = {};
+          inherit known;
+        }
+      else
+      let
+        seenSets' = seenSets // { ${fingerprint} = true; };
         result = builtins.foldl'
           (acc: name:
-            let r = walkValue value.${name} acc.known;
+            let
+              tryAttr = builtins.tryEval (builtins.seq value.${name} value.${name});
+            in
+            if !tryAttr.success then {
+              entries = acc.entries // { ${name} = ir.primopApp "throw" [ (ir.string "wechselbalg: attribute '${name}' could not be evaluated") ]; };
+              inherit (acc) defs known;
+            } else
+            let r = walkValue tryAttr.value acc.known seenSets';
             in {
               entries = acc.entries // { ${name} = r.ir; };
               defs = mergeDefs acc.defs r.defs;
@@ -110,7 +161,7 @@ let
           let
             argsResult = builtins.foldl'
               (acc: arg:
-                let r = walkValue arg acc.known;
+                let r = walkValue arg acc.known seenSets;
                 in {
                   args = acc.args ++ [ r.ir ];
                   defs = mergeDefs acc.defs r.defs;
@@ -130,6 +181,7 @@ let
           # Register BEFORE walking body — breaks cycles
           known' = known // { ${name} = value; };
           bodyResult = walkAST ast.value.body known';
+          splitBody = splitDefs bodyResult.defs;
 
           params = {
             identifier = ast.value.arguments.identifier or null;
@@ -153,8 +205,8 @@ let
         {
           ir = ir.ref name;
           defs = {
-            ${name} = ir.funcDef params bodyResult.ir bodyResult.defs;
-          };
+            ${name} = ir.funcDef params bodyResult.ir splitBody.local // { _hoistable = true; };
+          } // splitBody.hoistable;
           known = bodyResult.known;
         }
 
@@ -173,7 +225,7 @@ let
     # If the AST can be fully evaluated at Nix eval time, just walk the
     # resulting value (turns it into IR literals / refs).
     if evalResult.success then
-      walkValue evalResult.value known
+      walkValue evalResult.value known {}
 
     else if ast._expr == "lambda" then
       # Nested lambda inside a lambda body — same hoisting logic
@@ -186,6 +238,7 @@ let
         # so we can't use sameFunction.  Just register the name to claim it.
         known' = known // { ${name} = { __astPlaceholder = true; }; };
         bodyResult = walkAST ast.value.body known';
+        splitBody = splitDefs bodyResult.defs;
 
         params = {
           identifier = ast.value.arguments.identifier or null;
@@ -209,8 +262,8 @@ let
       {
         ir = ir.ref name;
         defs = {
-          ${name} = ir.funcDef params bodyResult.ir bodyResult.defs;
-        };
+          ${name} = ir.funcDef params bodyResult.ir splitBody.local;
+        } // splitBody.hoistable;
         known = bodyResult.known;
       }
 
@@ -220,12 +273,14 @@ let
       if builtins.hasAttr "closureEnvValue" ast.value then
         let
           envVal = ast.value.closureEnvValue;
-          type = builtins.typeOf envVal;
+          # Check if the value can be safely inspected.
+          # Some nixpkgs values (filesets, etc.) throw on inspection.
+          canWalk = builtins.tryEval (builtins.seq envVal (builtins.typeOf envVal));
         in
-        if type == "lambda" then
-          walkValue envVal known
+        if canWalk.success then
+          walkValue envVal known {}
         else
-          walkValue envVal known
+          { ir = ir.primopApp "throw" [ (ir.string "wechselbalg: closure variable '${ast.value.name}' could not be translated") ]; defs = {}; inherit known; }
       else
         { ir = ir.var ast.value.name; defs = {}; inherit known; }
 
@@ -437,7 +492,7 @@ let
               valueR = walkAST dyn.value nameR.known;
             in {
               pairs = acc.pairs ++ [
-                (ir.lazyAttrs { name = nameR.ir; value = valueR.ir; })
+                (ir.attrs { name = nameR.ir; value = valueR.ir; })
               ];
               defs = mergeDefs (mergeDefs acc.defs nameR.defs) valueR.defs;
               known = valueR.known;
@@ -457,14 +512,15 @@ let
         let
           refs = builtins.listToAttrs
             (builtins.map (name: { inherit name; value = ir.var name; }) names);
-          staticBody = ir.lazyAttrs refs;
+          staticBody = ir.attrs refs;
           body = if hasDynamic then ir.update staticBody dynamicIR else staticBody;
           allDefs = if hasDynamic then dynamicResult.defs else staticResult.defs;
           finalKnown = if hasDynamic then dynamicResult.known else staticResult.known;
+          split = splitDefs allDefs;
         in
         {
-          ir = ir.let_ staticResult.entries body allDefs;
-          defs = {};
+          ir = ir.let_ staticResult.entries body split.local;
+          defs = split.hoistable;
           known = finalKnown;
         }
       else
@@ -472,7 +528,7 @@ let
         # Use lazyAttrs so that entries referencing thunked outer variables
         # (e.g. from a let-binding or fixed-point) aren't forced prematurely.
         let
-          staticIR = ir.lazyAttrs staticResult.entries;
+          staticIR = ir.attrs staticResult.entries;
           finalIR =
             if hasDynamic && hasStatic then ir.update staticIR dynamicIR
             else if hasDynamic then dynamicIR
@@ -520,7 +576,7 @@ let
       let
         argsResult = builtins.foldl'
           (acc: arg:
-            let r = walkValue arg acc.known;
+            let r = walkValue arg acc.known {};
             in {
               args = acc.args ++ [ r.ir ];
               defs = mergeDefs acc.defs r.defs;
@@ -535,13 +591,17 @@ let
       }
 
     else if ast._expr == "path" then
-      throw "wechselbalg: path expressions cannot be translated (they reference the filesystem)"
+      # Path expressions can't be translated — emit a runtime error
+      # so the rest of the translation proceeds (the path may never
+      # be accessed at runtime).
+      { ir = ir.primopApp "throw" [ (ir.string "wechselbalg: path '${builtins.toJSON (ast.value or "unknown")}' cannot be translated") ]; defs = {}; inherit known; }
 
     else if ast._expr == "let" then
       # Nix `let` is always a recursive scope — bindings can reference
       # each other.  We emit ir.let_ so the backend thunks all bindings.
-      # ALL defs discovered inside the let stay local (they might reference
-      # let-bound variables, so hoisting them out would break scoping).
+      # Scope-dependent defs (from walkAST lambdas — may reference let-bound
+      # variables) stay local.  Hoistable defs (from walkValue — fully
+      # self-contained) propagate out so they're visible from all references.
       let
         attrs = ast.value.attrs.value.attrs;
         names = builtins.attrNames attrs;
@@ -556,24 +616,41 @@ let
           { bindings = {}; defs = {}; inherit known; }
           names;
         bodyResult = walkAST ast.value.body bindingsResult.known;
-        allLocalDefs = mergeDefs bindingsResult.defs bodyResult.defs;
+        allDefs = mergeDefs bindingsResult.defs bodyResult.defs;
+        split = splitDefs allDefs;
       in
       {
-        ir = ir.let_ bindingsResult.bindings bodyResult.ir allLocalDefs;
-        defs = {};  # Nothing propagates — all defs stay inside the let scope
+        ir = ir.let_ bindingsResult.bindings bodyResult.ir split.local;
+        defs = split.hoistable;  # Self-contained defs propagate out
         known = bodyResult.known;
       }
 
     else if ast._expr == "with" then
-      throw "wechselbalg: 'with' in lambda bodies is not yet supported. Workaround: destructure the set explicitly, e.g. replace 'with lib; map f xs' with '(lib.map) f xs' or use 'inherit (lib) map;' in a let."
+      # 'with' is hard to translate statically — emit a runtime error.
+      # In many cases the enclosing code path is never reached at runtime.
+      { ir = ir.primopApp "throw" [ (ir.string "wechselbalg: 'with' expressions are not supported") ]; defs = {}; inherit known; }
+
+    else if ast._expr == "assert" then
+      # assert condition; body → if condition then body else throw "assertion failed"
+      let
+        condR = walkAST ast.value.condition known;
+        bodyR = walkAST ast.value.body condR.known;
+      in
+      {
+        ir = ir.if_ condR.ir bodyR.ir (ir.primopApp "throw" [ (ir.string "wechselbalg: assertion failed") ]);
+        defs = mergeDefs condR.defs bodyR.defs;
+        known = bodyR.known;
+      }
 
     else
-      throw "wechselbalg: unknown AST node type '${ast._expr}'";
+      # Unknown AST node — emit runtime error instead of compile-time throw
+      # so the rest of the translation proceeds.
+      { ir = ir.primopApp "throw" [ (ir.string "wechselbalg: unsupported AST node '${ast._expr}'") ]; defs = {}; inherit known; };
 
 
   # ── Top-level entry point ───────────────────────────────────────
   walk = value:
-    let result = walkValue value {};
+    let result = walkValue value {} {};
     in {
       inherit (result) ir defs;
     };

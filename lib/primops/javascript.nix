@@ -49,12 +49,6 @@
   attrValues = "Value.lambda(s => s.attrValues())";
   intersectAttrs = "Value.lambda(a => Value.lambda(b => a.intersectAttrs(b)))";
   catAttrs = "Value.lambda(attr => Value.lambda(list => list.catAttrs(attr)))";
-  listToAttrs = "Value.lambda(list => list.listToAttrs())";
-  functionArgs = ''
-    Value.lambda(f => {
-      throw new Error("wechselbalg: functionArgs is not supported (functions are opaque at runtime)");
-    })
-  '';
 
   isNull = "Value.lambda(e => Value.fromBool(e.isNull()))";
   isInt = "Value.lambda(e => Value.fromBool(e.isInt()))";
@@ -64,6 +58,7 @@
   isList = "Value.lambda(e => Value.fromBool(e.isList()))";
   isAttrs = "Value.lambda(e => Value.fromBool(e.isAttrs()))";
   isFunction = "Value.lambda(e => Value.fromBool(e.isFunction()))";
+  isPath = "Value.lambda(e => Value.fromBool(false))";
 
   trace = ''
     Value.lambda(msg => Value.lambda(val => {
@@ -195,6 +190,28 @@
 
   splitVersion = ''
     Value.lambda(s => Value.fromList(s.asString().split(/([^0-9]+|[0-9]+)/).filter(Boolean).map(Value.fromString)))
+  '';
+
+  hashString = ''
+    Value.lambda(algo => Value.lambda(str => {
+      const s = str.asString();
+      let hash = 0;
+      for (let i = 0; i < s.length; i++) {
+        hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+      }
+      return Value.fromString(Math.abs(hash).toString(16).padStart(8, "0"));
+    }))
+  '';
+
+  listToAttrs = ''
+    Value.lambda(list => {
+      const r = {};
+      for (const e of list.asList()) {
+        const name = e.get("name");
+        if (!name.isNull()) r[name.asString()] = e.get("value");
+      }
+      return Value.fromSet(r);
+    })
   '';
 
   null = "Value.null_()";

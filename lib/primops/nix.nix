@@ -26,14 +26,18 @@
   mul = "builtins.mul";
   div = "builtins.div";
   add = "builtins.add";
-  hasAttr = "builtins.hasAttr";
+  # Nix ? operator returns false for non-set values, but builtins.hasAttr throws.
+  # Wrap to match ? semantics (the walker translates ? to hasAttr).
+  hasAttr = "(name: value: (builtins.isAttrs value) && (builtins.hasAttr name value))";
   getAttr = "builtins.getAttr";
   removeAttrs = "builtins.removeAttrs";
   attrNames = "builtins.attrNames";
   attrValues = "builtins.attrValues";
   intersectAttrs = "builtins.intersectAttrs";
   catAttrs = "builtins.catAttrs";
-  listToAttrs = "builtins.listToAttrs";
+  # Filter out null-named entries to match Nix dynamic attrset semantics
+  # (Nix silently drops { ${null} = value; } entries).
+  listToAttrs = "(entries: builtins.listToAttrs (builtins.filter (e: e.name != null) entries))";
   functionArgs = "builtins.functionArgs";
   isNull = "builtins.isNull";
   isInt = "builtins.isInt";
@@ -43,6 +47,35 @@
   isList = "builtins.isList";
   isAttrs = "builtins.isAttrs";
   isFunction = "builtins.isFunction";
+  isPath = "builtins.isPath";
+  genericClosure = "builtins.genericClosure";
+  dirOf = "builtins.dirOf";
+  baseNameOf = "builtins.baseNameOf";
+  import = "import";
+  readFile = "builtins.readFile";
+  pathExists = "builtins.pathExists";
+  toPath = "builtins.toPath";
+  storePath = "builtins.storePath";
+  readDir = "builtins.readDir";
+  hashString = "builtins.hashString";
+  unsafeDiscardStringContext = "builtins.unsafeDiscardStringContext";
+  unsafeGetAttrPos = "builtins.unsafeGetAttrPos";
+  addErrorContext = "builtins.addErrorContext";
+  appendContext = "builtins.appendContext";
+  getContext = "builtins.getContext";
+  derivationStrict = "builtins.derivationStrict";
+  placeholder = "builtins.placeholder";
+  fetchurl = "builtins.fetchurl";
+  fetchTarball = "builtins.fetchTarball";
+  fetchGit = "builtins.fetchGit";
+  toFile = "builtins.toFile";
+  filterSource = "builtins.filterSource";
+  path = "builtins.path";
+  storeDir = "builtins.storeDir";
+  nixVersion = "builtins.nixVersion";
+  currentSystem = "builtins.currentSystem";
+  currentTime = "builtins.currentTime";
+  langVersion = "builtins.langVersion";
   trace = "builtins.trace";
   warn = "(msg: val: builtins.trace \"[warn] $${msg}\" val)";
   seq = "builtins.seq";

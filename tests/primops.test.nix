@@ -132,4 +132,65 @@
     params = 0;
     expected.toBe = false;
   }
+
+  # ── mapAttrs ─────────────────────────────────────────────────
+  {
+    description = "builtins.mapAttrs";
+    func = params:
+      builtins.mapAttrs (name: value: value + params.offset) params.set;
+    params = { set = { a = 1; b = 2; }; offset = 10; };
+    expected.toBe = { a = 11; b = 12; };
+  }
+  {
+    description = "builtins.mapAttrs uses key";
+    func = params:
+      builtins.mapAttrs (name: value: name + "=" + builtins.toString value) params.set;
+    params = { set = { x = 1; y = 2; }; };
+    expected.toBe = { x = "x=1"; y = "y=2"; };
+  }
+
+  # ── listToAttrs / intersectAttrs ─────────────────────────────
+  {
+    description = "builtins.listToAttrs";
+    func = params:
+      builtins.listToAttrs params.entries;
+    params = { entries = [ { name = "a"; value = 1; } { name = "b"; value = 2; } ]; };
+    expected.toBe = { a = 1; b = 2; };
+  }
+  {
+    description = "builtins.intersectAttrs";
+    func = params:
+      builtins.intersectAttrs params.a params.b;
+    params = { a = { x = 1; y = 2; }; b = { y = 99; z = 3; }; };
+    expected.toBe = { y = 99; };
+  }
+
+  # ── removeAttrs ──────────────────────────────────────────────
+  {
+    description = "builtins.removeAttrs";
+    func = params:
+      builtins.removeAttrs params.set params.names;
+    params = { set = { a = 1; b = 2; c = 3; }; names = [ "b" ]; };
+    expected.toBe = { a = 1; c = 3; };
+  }
+
+  # ── all / any ────────────────────────────────────────────────
+  {
+    description = "builtins.all (true)";
+    func = params: builtins.all (x: x > 0) params.xs;
+    params = { xs = [ 1 2 3 ]; };
+    expected.toBe = true;
+  }
+  {
+    description = "builtins.any (true)";
+    func = params: builtins.any (x: x > 2) params.xs;
+    params = { xs = [ 1 2 3 ]; };
+    expected.toBe = true;
+  }
+  {
+    description = "builtins.any (false)";
+    func = params: builtins.any (x: x > 10) params.xs;
+    params = { xs = [ 1 2 3 ]; };
+    expected.toBe = false;
+  }
 ]

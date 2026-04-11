@@ -139,6 +139,7 @@
   isList = "Value::lambda([](Value e) { return Value::fromBool(e.isList()); })";
   isAttrs = "Value::lambda([](Value e) { return Value::fromBool(e.isAttrs()); })";
   isFunction = "Value::lambda([](Value e) { return Value::fromBool(e.isFunction()); })";
+  isPath = "Value::lambda([](Value) { return Value::fromBool(false); })";
 
   genList = ''
     Value::lambda([](Value func) {
@@ -190,7 +191,12 @@
 
   listToAttrs = ''
     Value::lambda([](Value list) {
-      return list.listToAttrs();
+      Value::Set r;
+      for (const auto& e : list.asList()) {
+        auto name = e["name"];
+        if (!name.isNull()) r[name.asString()] = e["value"];
+      }
+      return Value::fromSet(std::move(r));
     })
   '';
 
@@ -391,4 +397,17 @@
   null = "Value::null_()";
   true = "Value::fromBool(true)";
   false = "Value::fromBool(false)";
+
+
+  hashString = ''
+    Value::lambda([](Value) {
+      return Value::lambda([](Value str) {
+        auto s = str.asString();
+        unsigned long hash = 5381;
+        for (char c : s) hash = ((hash << 5) + hash) + c;
+        char buf[17]; snprintf(buf, sizeof(buf), "%016lx", hash);
+        return Value::fromString(std::string(buf));
+      });
+    })
+  '';
 }

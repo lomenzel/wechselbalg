@@ -42,20 +42,9 @@ let
       }
 
     else if _expr == "concatString/addition" then
-      let
-        operandsEval = builtins.map (o: eval o) value;
-        success = builtins.all (o: o.success) operandsEval;
-      in
-      {
-        inherit success;
-        value =
-          if success
-          then builtins.foldl'
-            (acc: curr: acc + curr.value)
-            (builtins.head operandsEval).value
-            (builtins.tail operandsEval)
-          else null;
-      }
+      # Don't try to eagerly evaluate — the + operator can mix types
+      # (string + int) which causes uncatchable errors.
+      { success = false; value = null; }
 
     else if _expr == "list" then
       let
@@ -104,26 +93,29 @@ let
         success =
           builtins.all (p: p.success) pathEval
           && exprEval.success
+          && builtins.isAttrs exprEval.value
           && (hasDefault -> defaultEval.success);
       in
-      {
-        inherit success;
-        value =
+      let
+        foldResult =
           if success then
-            (builtins.foldl'
+            builtins.foldl'
               (acc: curr:
-                if !acc.continue then acc
-                else if builtins.hasAttr curr.value acc.value then
-                  { continue = true; value = acc.value.${curr.value}; }
+                if !acc.continue || !acc.found then acc
+                else if builtins.isAttrs acc.value && builtins.hasAttr curr.value acc.value then
+                  { continue = true; value = acc.value.${curr.value}; found = true; }
                 else if hasDefault then
-                  { continue = false; value = defaultEval.value; }
+                  { continue = false; value = defaultEval.value; found = true; }
                 else
-                  throw "wechselbalg eval: attribute '${curr.value}' not found"
+                  { continue = false; value = null; found = false; }
               )
-              { continue = true; value = exprEval.value; }
+              { continue = true; value = exprEval.value; found = true; }
               pathEval
-            ).value
-          else null;
+          else { value = null; found = false; };
+      in
+      {
+        success = success && foldResult.found;
+        value = if success && foldResult.found then foldResult.value else null;
       }
 
     else if _expr == "if" then
@@ -151,18 +143,9 @@ let
       { success = false; value = null; }
 
     else if _expr == "call" then
-      let
-        funcEval = eval value.function;
-        argsEval = builtins.map (e: eval e) value.args;
-        success = funcEval.success && builtins.all (a: a.success) argsEval;
-      in
-      {
-        inherit success;
-        value =
-          if success
-          then builtins.foldl' (acc: curr: acc curr.value) funcEval.value argsEval
-          else null;
-      }
+      # Don't try to eagerly evaluate function calls — they may abort/throw
+      # in ways that tryEval can't catch.  Let the walker handle them structurally.
+      { success = false; value = null; }
 
     else if _expr == "update" then
       let
@@ -277,6 +260,10 @@ let
       }
 
     else if _expr == "primop" || _expr == "primopApp" then
+      { success = false; value = null; }
+
+    else if _expr == "assert" then
+      # Assertions can't be reliably evaluated at compile time
       { success = false; value = null; }
 
     else

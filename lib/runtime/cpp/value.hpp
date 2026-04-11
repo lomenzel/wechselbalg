@@ -17,7 +17,10 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <deque>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <memory>
 
@@ -237,6 +240,7 @@ struct Value {
   // ── Collection operations ─────────────────────────────────────
 
   Value update(const Value& other) const {
+    force(); other.force();
     if (type != Type::Set || other.type != Type::Set)
       throw std::runtime_error("wechselbalg: update (//) requires two sets");
     Set s = std::get<Set>(value);
@@ -246,6 +250,7 @@ struct Value {
   }
 
   Value concat(const Value& other) const {
+    force(); other.force();
     if (type != Type::List || other.type != Type::List)
       throw std::runtime_error("wechselbalg: concat (++) requires two lists");
     List r;
@@ -277,6 +282,7 @@ struct Value {
   }
 
   long long length() const {
+    force();
     if (type == Type::List) return std::get<List>(value).size();
     throw std::runtime_error("wechselbalg: length requires a list");
   }
@@ -368,8 +374,14 @@ struct Value {
 
   Value mapAttrs(const Value& f) const {
     Set r;
-    for (const auto& kv : asSet())
-      r[kv.first] = f(fromString(kv.first))(kv.second);
+    for (const auto& kv : asSet()) {
+      auto key = kv.first;
+      auto val = kv.second;
+      auto func = f;
+      r[key] = thunk([func, key, val]() mutable {
+        return func(fromString(key))(val);
+      });
+    }
     return fromSet(std::move(r));
   }
 

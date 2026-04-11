@@ -25,14 +25,20 @@ let
         "int" "float" "str" "bool" "list" "dict" "set" "type"
         "value" "Value"
       ];
+      # Replace characters valid in Nix identifiers but not in Python
+      cleaned = builtins.replaceStrings ["'" "-"] ["_q" "_h"] name;
     in
-    if builtins.elem name reserved
-    then "__wb_r_${name}"
-    else name;
+    if builtins.elem cleaned reserved
+    then "__wb_r_${cleaned}"
+    else cleaned;
 
   backend = {
     name = "python";
     extension = "py";
+
+    # Unknown primops become runtime errors so translation proceeds.
+    renderUnknownPrimop = name:
+      "Value.lambda_(lambda *__args: __wb_throw(Value.from_string(\"wechselbalg: primop '${name}' is not implemented in Python\")))";
 
     # ── Literals ────────────────────────────────────────────────
     renderInt = value: "Value.from_int(${toString value})";
@@ -46,14 +52,7 @@ let
 
     renderAttrs = entries:
       let
-        pairs = builtins.map
-          (name: "${builtins.toJSON name}: ${entries.${name}}")
-          (builtins.attrNames entries);
-      in
-      "Value.from_set({${join ", " pairs}})";
-    # ── Lazy attrset (entries evaluated on first access) ────────
-    renderLazyAttrs = entries:
-      let
+
         names = builtins.attrNames entries;
         pairs = builtins.map
           (name: "${builtins.toJSON name}: lambda: ${entries.${name}}")
@@ -131,8 +130,8 @@ let
           if formals != null
           then builtins.map (f:
             if f.hasDefault
-            then "(${sanitize f.name} := ${paramName}.get_or(${builtins.toJSON f.name}, ${f.default}))"
-            else "(${sanitize f.name} := ${paramName}.get(${builtins.toJSON f.name}))"
+            then "(${sanitize f.name} := Value.thunk(lambda: ${paramName}.get_or(${builtins.toJSON f.name}, ${f.default})))"
+            else "(${sanitize f.name} := Value.thunk(lambda: ${paramName}.get(${builtins.toJSON f.name})))"
           ) formals
           else [];
 

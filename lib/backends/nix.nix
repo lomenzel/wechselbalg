@@ -22,27 +22,23 @@ let
   backend = {
     name = "nix";
     extension = "nix";
-
+    # Unknown primops fall back to builtins.<name> so translation proceeds.
+    renderUnknownPrimop = name: "builtins.${name}";
     # ── Literals ────────────────────────────────────────────────
     renderInt = value: toString value;
     renderFloat = value: builtins.toJSON value;
-    renderString = value: builtins.toJSON value;
+    renderString = value:
+      # builtins.toJSON produces valid JSON strings, but Nix strings also
+      # treat ${ as interpolation. Escape any ${ that toJSON doesn't handle.
+      builtins.replaceStrings ["\${"] ["\\$\{"] (builtins.toJSON value);
     renderBool = value: if value then "true" else "false";
     renderNull = "null";
 
     # ── Collections ─────────────────────────────────────────────
     renderList = elements: "[ ${join " " elements} ]";
 
+    # Nix attrsets are already lazy, so no thunking needed.
     renderAttrs = entries:
-      let
-        pairs = builtins.map
-          (name: "${builtins.toJSON name} = ${entries.${name}};")
-          (builtins.attrNames entries);
-      in
-      "{ ${join " " pairs} }";
-    # ── Lazy attrset (entries evaluated on first access) ────────
-    # Nix attrsets are already lazy, so this is just a regular attrset.
-    renderLazyAttrs = entries:
       let
         pairs = builtins.map
           (name: "${builtins.toJSON name} = ${entries.${name}};")
@@ -61,7 +57,7 @@ let
         # localDefs are function definitions scoped to this let
         allLines = localDefs ++ bindingLines;
       in
-      "(let ${join " " allLines} in ${body})";
+      "(let ${join "\n" allLines}\nin ${body})";
 
     # ── References ──────────────────────────────────────────────
     renderRef = name: sanitize name;
@@ -97,7 +93,20 @@ let
       if default == null then
         access
       else
-        "(let __v = builtins.tryEval ${access}; in if __v.success then __v.value else ${default})";
+        # Use hasAttr checks (tryEval doesn't catch missing-attr errors in Nix).
+        # Short-circuit && ensures each hasAttr only runs if the previous succeeded.
+        let
+          checks = builtins.genList (i:
+            let
+              pathUpTo = builtins.genList (j: builtins.elemAt path j) i;
+              base = builtins.foldl' (acc: p: "(builtins.getAttr ${p} ${acc})") expr pathUpTo;
+              elem = builtins.elemAt path i;
+            in
+            "((builtins.isAttrs ${base}) && (builtins.hasAttr ${elem} ${base}))"
+          ) (builtins.length path);
+          allChecks = builtins.concatStringsSep " && " checks;
+        in
+        "(if ${allChecks} then ${access} else ${default})";
 
     # ── Function definitions ────────────────────────────────────
     renderParams = params: params;
@@ -120,7 +129,10 @@ let
                 else sanitize f.name
               ) formals;
               formalsStr = join ", " formalItems;
-              ellipsisStr = if ellipsis then ", ..." else "";
+              ellipsisStr =
+                if ellipsis then
+                  if formalItems == [] then "..." else ", ..."
+                else "";
             in
             "{ ${formalsStr}${ellipsisStr} }"
           else null;
@@ -136,12 +148,12 @@ let
 
         localDefsBlock =
           if localDefs == [] then ""
-          else join " " localDefs;
+          else join "\n" localDefs;
 
         bodyWithLocalDefs =
           if localDefs == []
           then bodyStr
-          else "(let ${localDefsBlock} in ${bodyStr})";
+          else "(let ${localDefsBlock}\nin ${bodyStr})";
       in
       "${sanitize name} = ${paramPattern}: ${bodyWithLocalDefs};";
 

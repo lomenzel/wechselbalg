@@ -435,10 +435,11 @@ class Value:
 
     def map_attrs(self, f: "Value") -> "Value":
         s = self.as_set()
-        r = {}
+        factories = {}
         for k in s.keys():
-            r[k] = f.call(Value.from_string(k)).call(s[k])
-        return Value.from_set(r)
+            key = k
+            factories[key] = lambda key=key: f.call(Value.from_string(key)).call(s[key])
+        return Value.lazy_set(factories)
 
     def intersect_attrs(self, other: "Value") -> "Value":
         a, b = self.as_set(), other.as_set()
@@ -685,3 +686,53 @@ def __wb_split_version(s):
     return Value.from_list([
         Value.from_string(p) for p in re.findall(r"[0-9]+|[^0-9]+", s.as_string())
     ])
+
+
+def __wb_function_args(f):
+    if hasattr(f, "_function_args"):
+        return Value.from_set({k: Value.from_bool(v) for k, v in f._function_args.items()})
+    return Value.from_set({})
+
+
+def __wb_list_to_attrs(lst):
+    r = {}
+    for e in lst.as_list():
+        name = e.get("name")
+        if not name.is_null():
+            r[name.as_string()] = e.get("value")
+    return Value.from_set(r)
+
+
+def __wb_generic_closure(args):
+    start_set = args.get("startSet").as_list()
+    operator = args.get("operator")
+    result = []
+    seen = set()
+    work = list(start_set)
+    while work:
+        item = work.pop(0)
+        key = item.get("key").to_json_().as_string()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+        new_items = operator.call(item).as_list()
+        work.extend(new_items)
+    return Value.from_list(result)
+
+
+def __wb_hash_string(algo, s):
+    import hashlib
+    text = s.as_string()
+    algo_name = algo.as_string()
+    if algo_name == "sha256":
+        h = hashlib.sha256(text.encode()).hexdigest()
+    elif algo_name == "sha512":
+        h = hashlib.sha512(text.encode()).hexdigest()
+    elif algo_name == "sha1":
+        h = hashlib.sha1(text.encode()).hexdigest()
+    elif algo_name == "md5":
+        h = hashlib.md5(text.encode()).hexdigest()
+    else:
+        h = hashlib.sha256(text.encode()).hexdigest()
+    return Value.from_string(h)

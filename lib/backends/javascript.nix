@@ -19,14 +19,20 @@ let
         "private" "protected" "public" "static" "yield" "int" "float"
         "value" "Value"
       ];
+      # Replace characters valid in Nix identifiers but not in JS
+      cleaned = builtins.replaceStrings ["'" "-"] ["_q" "_h"] name;
     in
-    if builtins.elem name reserved
-    then "__wb_rsv_${name}"
-    else name;
+    if builtins.elem cleaned reserved
+    then "__wb_rsv_${cleaned}"
+    else cleaned;
 
   backend = {
     name = "javascript";
     extension = "js";
+
+    # Unknown primops become runtime errors so translation proceeds.
+    renderUnknownPrimop = name:
+      "Value.lambda((...__args) => { throw new Error(\"wechselbalg: primop '${name}' is not implemented in JavaScript\"); })";
 
     # ── Literals ────────────────────────────────────────────────
     renderInt = value: "Value.fromInt(${toString value}n)";
@@ -40,14 +46,7 @@ let
 
     renderAttrs = entries:
       let
-        pairs = builtins.map
-          (name: "${builtins.toJSON name}: ${entries.${name}}")
-          (builtins.attrNames entries);
-      in
-      "Value.fromSet({${join ", " pairs}})";
-    # ── Lazy attrset (entries evaluated on first access) ────────
-    renderLazyAttrs = entries:
-      let
+
         names = builtins.attrNames entries;
         pairs = builtins.map
           (name: "${builtins.toJSON name}: () => ${entries.${name}}")
@@ -128,8 +127,8 @@ let
           if formals != null
           then join "\n  " (builtins.map (f:
             if f.hasDefault
-            then "const ${sanitize f.name} = ${paramName}.getOr(${builtins.toJSON f.name}, ${f.default});"
-            else "const ${sanitize f.name} = ${paramName}.get(${builtins.toJSON f.name});"
+            then "const ${sanitize f.name} = Value.thunk(() => ${paramName}.getOr(${builtins.toJSON f.name}, ${f.default}));"
+            else "const ${sanitize f.name} = Value.thunk(() => ${paramName}.get(${builtins.toJSON f.name}));"
           ) formals)
           else "";
 
@@ -150,7 +149,7 @@ let
         bindings = builtins.concatStringsSep "\n  "
           (builtins.filter (s: s != "") [ identifierBinding formalsBindings ellipsisCheck localDefsBlock ]);
       in
-      ''const ${sanitize name} = Value.lambda(function ${sanitize name}(${paramName}) {
+      ''const ${sanitize name} = Value.lambda(function _${sanitize name}(${paramName}) {
   ${bindings}
   return ${bodyStr};
 });'';

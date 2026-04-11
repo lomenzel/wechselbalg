@@ -24,14 +24,20 @@ let
         "catch" "operator" "friend" "inline" "auto" "nullptr"
         "true" "false" "this" "and" "or" "not"
       ];
+      # Replace characters valid in Nix identifiers but not in C++
+      cleaned = builtins.replaceStrings ["'" "-"] ["_q" "_h"] name;
     in
-    if builtins.elem name reserved
-    then "__wb_rsv_${name}"
-    else name;
+    if builtins.elem cleaned reserved
+    then "__wb_rsv_${cleaned}"
+    else cleaned;
 
   backend = {
     name = "cpp";
     extension = "cpp";
+
+    # Unknown primops become runtime errors so translation proceeds.
+    renderUnknownPrimop = name:
+      "Value::lambda([](Value) -> Value { throw std::runtime_error(\"wechselbalg: primop '${name}' is not implemented in C++\"); })";
 
     # ── Literals ────────────────────────────────────────────────
     renderInt = value: "Value::fromInt(${toString value})";
@@ -45,14 +51,7 @@ let
 
     renderAttrs = entries:
       let
-        pairs = builtins.map
-          (name: ''{${builtins.toJSON name}, ${entries.${name}}}'')
-          (builtins.attrNames entries);
-      in
-      "Value::fromSet({${join ", " pairs}})";
-    # ── Lazy attrset (entries evaluated on first access) ────────
-    renderLazyAttrs = entries:
-      let
+
         names = builtins.attrNames entries;
         pairs = builtins.map
           (name: ''{${builtins.toJSON name}, Value::thunk([=]() -> Value { return ${entries.${name}}; })}'')
@@ -135,11 +134,12 @@ let
           then join "\n    " (builtins.map (f:
             if f.hasDefault
             then ''
-              auto ${sanitize f.name} = std::make_shared<Value>();
-              try { *${sanitize f.name} = ${paramName}[${builtins.toJSON f.name}]; }
-              catch(...) { *${sanitize f.name} = ${f.default}; }
+              auto ${sanitize f.name} = std::make_shared<Value>(Value::thunk([=]() -> Value {
+                try { return ${paramName}[${builtins.toJSON f.name}]; }
+                catch(...) { return ${f.default}; }
+              }));
             ''
-            else ''auto ${sanitize f.name} = std::make_shared<Value>(${paramName}[${builtins.toJSON f.name}]);''
+            else ''auto ${sanitize f.name} = std::make_shared<Value>(Value::thunk([=]() -> Value { return ${paramName}[${builtins.toJSON f.name}]; }));''
           ) formals)
           else "";
 

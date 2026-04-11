@@ -30,4 +30,12 @@
     params = { a = "x"; b = "y"; c = "z"; };
     expected.toBe = "x-yz";
   }
+
+  # ── Dollar-brace escaping (Nix backend) ─────────────────────
+  {
+    description = "string containing dollar-brace literal";
+    func = params: params + "$" + "{x}";
+    params = "prefix";
+    expected.toBe = "prefix\${x}";
+  }
 ]

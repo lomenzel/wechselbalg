@@ -82,13 +82,6 @@ rec {
   # localDefs: { name = funcDef; ... } — hoisted lambdas scoped to this let
   let_ = bindings: body: localDefs: { _t = "let"; inherit bindings body localDefs; };
 
-  # ── Lazy attrsets ─────────────────────────────────────────────────
-  # An attrset whose entries are evaluated lazily (on first access).
-  # Needed for attrsets inside lambda bodies so that the fixed-point
-  # pattern (`lib.fix`) and similar recursive constructions work.
-  # entries: { name = ir-node; ... }
-  lazyAttrs = entries: { _t = "lazy-attrs"; inherit entries; };
-
   # ── Function definitions (used in the top-level `definitions` map) ──
   # Not an IR node per se — this is the shape of entries in `definitions`.
   # params: { identifier; formals; ellipsis; }

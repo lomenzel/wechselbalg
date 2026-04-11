@@ -52,4 +52,45 @@
     params = { a = 1; b = 5; };
     expected.toBe = true;
   }
+
+  # ── Lazy formal parameter bindings ───────────────────────────
+  # Formal params are lazily extracted from the argument set.
+  # If a param is never used, its extraction should not be forced.
+  {
+    description = "lazy formal params: unused param not forced";
+    func = params:
+      let f = { a, b ? builtins.throw "should not be forced" }: a;
+      in f { a = params; b = 42; };
+    params = 10;
+    expected.toBe = 10;
+  }
+  {
+    description = "lazy formal params: default applied when missing";
+    func = params:
+      let f = { a, b ? 100 }: a + b;
+      in f { a = params; };
+    params = 5;
+    expected.toBe = 105;
+  }
+
+  # ── Ellipsis-only formals ────────────────────────────────────
+  # { ... }: pattern with no named formals — must not produce { , ... }.
+  {
+    description = "ellipsis-only formals accepts any set";
+    func = params:
+      let f = { ... }: params;
+      in f { a = 1; b = 2; };
+    params = 42;
+    expected.toBe = 42;
+  }
+
+  # ── Complex default expressions ─────────────────────────────
+  {
+    description = "formal default uses computation";
+    func = params:
+      let f = { x, y ? x * 2 }: x + y;
+      in f { x = params; };
+    params = 3;
+    expected.toBe = 9;
+  }
 ]

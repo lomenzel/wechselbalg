@@ -46,8 +46,7 @@
   attrValues = "Value.lambda_(lambda s: s.attr_values())";
   intersectAttrs = "Value.lambda_(lambda a: Value.lambda_(lambda b: a.intersect_attrs(b)))";
   catAttrs = "Value.lambda_(lambda attr: Value.lambda_(lambda lst: lst.cat_attrs(attr)))";
-  listToAttrs = "Value.lambda_(lambda lst: lst.list_to_attrs())";
-  functionArgs = "Value.lambda_(lambda f: __wb_throw(Value.from_string('wechselbalg: functionArgs is not supported')))";
+  listToAttrs = "Value.lambda_(lambda lst: __wb_list_to_attrs(lst))";
 
   isNull = "Value.lambda_(lambda e: Value.from_bool(e.is_null()))";
   isInt = "Value.lambda_(lambda e: Value.from_bool(e.is_int()))";
@@ -57,6 +56,7 @@
   isList = "Value.lambda_(lambda e: Value.from_bool(e.is_list()))";
   isAttrs = "Value.lambda_(lambda e: Value.from_bool(e.is_set()))";
   isFunction = "Value.lambda_(lambda e: Value.from_bool(e.is_function()))";
+  isPath = "Value.lambda_(lambda e: Value.from_bool(False))";
 
   trace = "Value.lambda_(lambda msg: Value.lambda_(lambda val: __wb_trace(msg, val)))";
   warn = "Value.lambda_(lambda msg: Value.lambda_(lambda val: __wb_warn(msg, val)))";
@@ -96,6 +96,8 @@
   compareVersions = "Value.lambda_(lambda a: Value.lambda_(lambda b: __wb_compare_versions(a, b)))";
 
   splitVersion = "Value.lambda_(lambda s: __wb_split_version(s))";
+
+  hashString = "Value.lambda_(lambda algo: Value.lambda_(lambda s: __wb_hash_string(algo, s)))";
 
   null = "Value.null_()";
 }
