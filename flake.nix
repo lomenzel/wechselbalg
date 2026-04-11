@@ -14,27 +14,29 @@
       ...
     }:
     let
-      supportedSystems = [
-        "x86_64-linux"
-        "aarch64-linux"
-        "x86_64-darwin"
-        "aarch64-darwin"
-      ];
-      eachSystem = f: nixpkgs.lib.genAttrs supportedSystems (system:
-        f {
-          inherit system;
-          pkgs = import nixpkgs {
+      supportedSystems = nixpkgs.lib.systems.flakeExposed;
+      eachSystem =
+        f:
+        nixpkgs.lib.genAttrs supportedSystems (
+          system:
+          f {
             inherit system;
-          };
-        }
-      );
+            pkgs = import nixpkgs {
+              inherit system;
+              overlays = [ self.overlay ];
+            };
+          }
+        );
     in
     {
       lib = import ./lib;
 
-      overlays.default = final: prev: {
-        wechselbalg = self.lib;
-      };
+      overlay =
+        final: prev:
+
+        {
+          lib = prev.lib // self.lib;
+        };
 
       checks = eachSystem (
         {
@@ -48,7 +50,7 @@
             wechselbalg = self.lib;
           };
         in
-          testsByBackend
+        testsByBackend
       );
 
       devShells = eachSystem (
@@ -60,7 +62,11 @@
         {
           default = pkgs.mkShell {
             buildInputs = [
-              nixFork.packages.${system}.nix
+              (pkgs.writeShellScriptBin "nix" ''
+                ulimit -s unlimited && ${
+                  nixFork.packages.${system}.nix
+                }/bin/nix --option max-call-depth 10000000 "$@"
+              '')
             ];
           };
         }
