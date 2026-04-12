@@ -28,7 +28,9 @@ let
     }:
     let
       backend =
-        if builtins.hasAttr lang backends then
+        if !builtins.hasAttr "reify" builtins then
+          throw "wechselbalg: builtins.reify is required. Please use the Nix Fork from github:lomenzel/nix."
+        else if builtins.hasAttr lang backends then
           backends.${lang}
         else
           throw "wechselbalg: unknown backend '${lang}'. Available: ${builtins.concatStringsSep ", " (builtins.attrNames backends)}";

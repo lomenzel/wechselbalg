@@ -39,7 +39,17 @@
         final: prev:
 
         {
-          lib = prev.lib // self.lib;
+          lib = prev.lib // {
+            inherit (self.lib)
+              toJS
+              toCpp
+              toPython
+              toNix
+              cppRuntime
+              jsRuntime
+              pythonRuntime
+              ;
+          };
         };
 
       checks = eachSystem (
