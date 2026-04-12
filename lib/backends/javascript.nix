@@ -202,12 +202,31 @@ let
             localDefsBlock
           ]
         );
+
+        # Build formals metadata for functionArgs support
+        formalsMetadata =
+          if formals != null then
+            let
+              entries = builtins.map (f: "${builtins.toJSON f.name}: ${if f.hasDefault then "true" else "false"}") formals;
+            in
+            "{${join ", " entries}}"
+          else null;
+
+        lambdaCtor =
+          if formalsMetadata != null
+          then "Value.lambdaWithFormals"
+          else "Value.lambda";
+
+        formalsArg =
+          if formalsMetadata != null
+          then ", ${formalsMetadata}"
+          else "";
       in
       ''
-        const ${sanitize name} = Value.lambda(function _${sanitize name}(${paramName}) {
+        const ${sanitize name} = ${lambdaCtor}(function _${sanitize name}(${paramName}) {
           ${bindings}
           return ${bodyStr};
-        });'';
+        }${formalsArg});'';
 
     # ── Program assembly ────────────────────────────────────────
     # Bare expression. No runtime included — user provides Value class.

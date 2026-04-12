@@ -242,12 +242,31 @@ let
             localDefsBlock
           ]
         );
+
+        # Build formals metadata for functionArgs support
+        formalsMetadata =
+          if formals != null then
+            let
+              entries = builtins.map (f: "{${builtins.toJSON f.name}, ${if f.hasDefault then "true" else "false"}}") formals;
+            in
+            "{${join ", " entries}}"
+          else null;
+
+        lambdaCtor =
+          if formalsMetadata != null
+          then "Value::lambdaWithFormals"
+          else "Value::lambda";
+
+        formalsArg =
+          if formalsMetadata != null
+          then ", ${formalsMetadata}"
+          else "";
       in
       ''
-        *${sanitize name} = Value::lambda([=](Value ${paramName}) -> Value {
+        *${sanitize name} = ${lambdaCtor}([=](Value ${paramName}) -> Value {
           ${bindings}
           return ${bodyStr};
-        });
+        }${formalsArg});
       '';
 
     # ── Program assembly ────────────────────────────────────────

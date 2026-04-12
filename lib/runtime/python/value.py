@@ -109,7 +109,7 @@ class _MergedSetProxy:
 
 
 class Value:
-    __slots__ = ("type", "value")
+    __slots__ = ("type", "value", "_formals")
 
     def __init__(self, type_: str, value: Any):
         self.type = type_
@@ -150,6 +150,12 @@ class Value:
         return Value("lambda", v)
 
     @staticmethod
+    def lambda_with_formals(v: Callable[["Value"], "Value"], formals: dict[str, bool]) -> "Value":
+        val = Value("lambda", v)
+        val._formals = formals
+        return val
+
+    @staticmethod
     def thunk(fn: Callable[[], "Value"]) -> "_Thunk":
         return _Thunk(fn)
 
@@ -158,6 +164,16 @@ class Value:
         return Value.from_set(_LazySetProxy(factories))
 
     # ── Type checks ───────────────────────────────────────────────
+
+    def function_args(self) -> "Value":
+        if self.type == "set":
+            return Value.from_set({})
+        if self.type != "lambda":
+            raise RuntimeError(f"wechselbalg: functionArgs requires a function")
+        formals = getattr(self, "_formals", None)
+        if formals is None:
+            return Value.from_set({})
+        return Value.from_set({k: Value.from_bool(v) for k, v in formals.items()})
 
     def is_null(self) -> bool:
         return self.type == "null"

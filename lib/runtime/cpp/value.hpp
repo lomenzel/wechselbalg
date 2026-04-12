@@ -44,6 +44,7 @@ struct Value {
   mutable Type type;
   mutable std::variant<std::monostate, bool, long long, double, std::string,
                List, Set, Func, ThunkPtr> value;
+  mutable std::map<std::string, bool> _formals;
 
   Value() : type(Type::Null), value(std::monostate{}) {}
 
@@ -65,6 +66,7 @@ struct Value {
       }
       type = state.result->type;
       value = state.result->value;
+      _formals = state.result->_formals;
     }
   }
 
@@ -83,6 +85,11 @@ struct Value {
   }
   static Value fromSet(Set v) { return Value(Type::Set, std::move(v)); }
   static Value lambda(Func v) { return Value(Type::Lambda, std::move(v)); }
+  static Value lambdaWithFormals(Func v, std::map<std::string, bool> formals) {
+    Value val(Type::Lambda, std::move(v));
+    val._formals = std::move(formals);
+    return val;
+  }
 
   // Lazy thunk — transparent lazy evaluation with caching.
   static Value thunk(std::function<Value()> fn) {
@@ -112,6 +119,17 @@ struct Value {
   bool isSet() const { force(); return type == Type::Set; }
   bool isAttrs() const { force(); return type == Type::Set; }
   bool isFunction() const { force(); return type == Type::Lambda; }
+
+  Value functionArgs() const {
+    force();
+    if (type == Type::Set) return fromSet({});
+    if (type != Type::Lambda)
+      throw std::runtime_error("wechselbalg: functionArgs requires a function");
+    Set r;
+    for (const auto& [k, v] : _formals)
+      r[k] = fromBool(v);
+    return fromSet(std::move(r));
+  }
 
   // ── Accessors ─────────────────────────────────────────────────
 

@@ -141,6 +141,8 @@
   isFunction = "Value::lambda([](Value e) { return Value::fromBool(e.isFunction()); })";
   isPath = "Value::lambda([](Value) { return Value::fromBool(false); })";
 
+  functionArgs = "Value::lambda([](Value f) -> Value { return f.functionArgs(); })";
+
   genList = ''
     Value::lambda([](Value func) {
       return Value::lambda([func](Value count) {

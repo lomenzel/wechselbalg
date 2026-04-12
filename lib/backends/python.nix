@@ -148,11 +148,30 @@ let
         localDefsElements = localDefs;
 
         allElements = identifierBinding ++ formalsBindings ++ ellipsisCheck ++ localDefsElements;
+
+        # Build formals metadata for functionArgs support
+        formalsMetadata =
+          if formals != null then
+            let
+              entries = builtins.map (f: "${builtins.toJSON f.name}: ${if f.hasDefault then "True" else "False"}") formals;
+            in
+            "{${join ", " entries}}"
+          else null;
+
+        lambdaCtor =
+          if formalsMetadata != null
+          then "Value.lambda_with_formals"
+          else "Value.lambda_";
+
+        formalsArg =
+          if formalsMetadata != null
+          then ", ${formalsMetadata}"
+          else "";
       in
       if allElements == [] then
-        "(${sanitize name} := Value.lambda_(lambda ${paramName}: ${bodyStr}))"
+        "(${sanitize name} := ${lambdaCtor}(lambda ${paramName}: ${bodyStr}${formalsArg}))"
       else
-        "(${sanitize name} := Value.lambda_(lambda ${paramName}: (${join ", " (allElements ++ [ bodyStr ])})[-1]))";
+        "(${sanitize name} := ${lambdaCtor}(lambda ${paramName}: (${join ", " (allElements ++ [ bodyStr ])})[-1]${formalsArg}))";
 
     # ── Program assembly ────────────────────────────────────────
     # Bare expression. No runtime included — user provides Value class.

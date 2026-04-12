@@ -60,6 +60,8 @@
   isFunction = "Value.lambda(e => Value.fromBool(e.isFunction()))";
   isPath = "Value.lambda(e => Value.fromBool(false))";
 
+  functionArgs = "Value.lambda(f => f.functionArgs())";
+
   trace = ''
     Value.lambda(msg => Value.lambda(val => {
       console.log("[trace]", msg.asString());

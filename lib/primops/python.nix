@@ -58,6 +58,8 @@
   isFunction = "Value.lambda_(lambda e: Value.from_bool(e.is_function()))";
   isPath = "Value.lambda_(lambda e: Value.from_bool(False))";
 
+  functionArgs = "Value.lambda_(lambda f: f.function_args())";
+
   trace = "Value.lambda_(lambda msg: Value.lambda_(lambda val: __wb_trace(msg, val)))";
   warn = "Value.lambda_(lambda msg: Value.lambda_(lambda val: __wb_warn(msg, val)))";
 
