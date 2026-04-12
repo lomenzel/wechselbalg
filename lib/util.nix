@@ -4,11 +4,12 @@
 # Operates on the `known` attrset passed through the walker.
 
 let
-  findNew = prefix: i: known:
-    let name = "${prefix}${toString i}";
-    in if builtins.hasAttr name known
-       then findNew prefix (i + 1) known
-       else name;
+  findNew =
+    prefix: i: known:
+    let
+      name = "${prefix}${toString i}";
+    in
+    if builtins.hasAttr name known then findNew prefix (i + 1) known else name;
 in
 {
   # Generate a fresh function name not yet in `known`.

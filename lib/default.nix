@@ -22,27 +22,55 @@ let
 
   # Core translate: walk the value, then render with the chosen backend.
   translate =
-    { lang
-    , value
+    {
+      lang,
+      value,
     }:
     let
       backend =
-        if builtins.hasAttr lang backends
-        then backends.${lang}
-        else throw "wechselbalg: unknown backend '${lang}'. Available: ${builtins.concatStringsSep ", " (builtins.attrNames backends)}";
+        if builtins.hasAttr lang backends then
+          backends.${lang}
+        else
+          throw "wechselbalg: unknown backend '${lang}'. Available: ${builtins.concatStringsSep ", " (builtins.attrNames backends)}";
       walkResult = walk value;
     in
     renderer.render backend walkResult;
 
   # Convenience wrappers
-  toJS = value: translate { lang = "javascript"; inherit value; };
-  toCpp = value: translate { lang = "cpp"; inherit value; };
-  toPython = value: translate { lang = "python"; inherit value; };
-  toNix = value: translate { lang = "nix"; inherit value; };
+  toJS =
+    value:
+    translate {
+      lang = "javascript";
+      inherit value;
+    };
+  toCpp =
+    value:
+    translate {
+      lang = "cpp";
+      inherit value;
+    };
+  toPython =
+    value:
+    translate {
+      lang = "python";
+      inherit value;
+    };
+  toNix =
+    value:
+    translate {
+      lang = "nix";
+      inherit value;
+    };
 
 in
 {
-  inherit translate toJS toCpp toPython toNix;
+  inherit
+    translate
+    toJS
+    toCpp
+    toPython
+    toNix
+    ;
 
   # The C++ Value type header — users include this in their project.
   # Usage: builtins.toFile "wechselbalg.hpp" lib.cppRuntime

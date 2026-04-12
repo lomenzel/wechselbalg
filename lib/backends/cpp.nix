@@ -82,13 +82,12 @@ let
     extension = "cpp";
 
     # Unknown primops become runtime errors so translation proceeds.
-    renderUnknownPrimop =
-      name: ''
-        Value::lambda([](Value) -> Value 
-        { 
-          throw std::runtime_error(\"wechselbalg: primop '${name}' is not implemented in C++\"); 
-        })
-      '';
+    renderUnknownPrimop = name: ''
+      Value::lambda([](Value) -> Value 
+      { 
+        throw std::runtime_error(\"wechselbalg: primop '${name}' is not implemented in C++\"); 
+      })
+    '';
 
     # ── Literals ────────────────────────────────────────────────
     renderInt = value: "Value::fromInt(${toString value})";
@@ -247,20 +246,17 @@ let
         formalsMetadata =
           if formals != null then
             let
-              entries = builtins.map (f: "{${builtins.toJSON f.name}, ${if f.hasDefault then "true" else "false"}}") formals;
+              entries = builtins.map (
+                f: "{${builtins.toJSON f.name}, ${if f.hasDefault then "true" else "false"}}"
+              ) formals;
             in
             "{${join ", " entries}}"
-          else null;
+          else
+            null;
 
-        lambdaCtor =
-          if formalsMetadata != null
-          then "Value::lambdaWithFormals"
-          else "Value::lambda";
+        lambdaCtor = if formalsMetadata != null then "Value::lambdaWithFormals" else "Value::lambda";
 
-        formalsArg =
-          if formalsMetadata != null
-          then ", ${formalsMetadata}"
-          else "";
+        formalsArg = if formalsMetadata != null then ", ${formalsMetadata}" else "";
       in
       ''
         *${sanitize name} = ${lambdaCtor}([=](Value ${paramName}) -> Value {

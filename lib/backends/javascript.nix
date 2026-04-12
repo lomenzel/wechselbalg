@@ -207,20 +207,17 @@ let
         formalsMetadata =
           if formals != null then
             let
-              entries = builtins.map (f: "${builtins.toJSON f.name}: ${if f.hasDefault then "true" else "false"}") formals;
+              entries = builtins.map (
+                f: "${builtins.toJSON f.name}: ${if f.hasDefault then "true" else "false"}"
+              ) formals;
             in
             "{${join ", " entries}}"
-          else null;
+          else
+            null;
 
-        lambdaCtor =
-          if formalsMetadata != null
-          then "Value.lambdaWithFormals"
-          else "Value.lambda";
+        lambdaCtor = if formalsMetadata != null then "Value.lambdaWithFormals" else "Value.lambda";
 
-        formalsArg =
-          if formalsMetadata != null
-          then ", ${formalsMetadata}"
-          else "";
+        formalsArg = if formalsMetadata != null then ", ${formalsMetadata}" else "";
       in
       ''
         const ${sanitize name} = ${lambdaCtor}(function _${sanitize name}(${paramName}) {

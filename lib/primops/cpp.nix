@@ -428,7 +428,6 @@
   true = "Value::fromBool(true)";
   false = "Value::fromBool(false)";
 
-
   hashString = ''
     Value::lambda([](Value) {
       return Value::lambda([](Value str) {

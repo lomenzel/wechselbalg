@@ -434,11 +434,25 @@
       param:
       builtins.genericClosure {
         startSet = [ { key = param; } ];
-        operator = item:
-          if item.key == 1 then [ { key = 2; } { key = 3; } ]
-          else if item.key == 2 then [ { key = 4; } { key = 5; } ]
-          else if item.key == 3 then [ { key = 6; } { key = 7; } ]
-          else [];
+        operator =
+          item:
+          if item.key == 1 then
+            [
+              { key = 2; }
+              { key = 3; }
+            ]
+          else if item.key == 2 then
+            [
+              { key = 4; }
+              { key = 5; }
+            ]
+          else if item.key == 3 then
+            [
+              { key = 6; }
+              { key = 7; }
+            ]
+          else
+            [ ];
       };
     params = 1;
     expected.toBe = [
@@ -457,10 +471,20 @@
       param:
       builtins.genericClosure {
         startSet = [ { key = param; } ];
-        operator = item:
-          if item.key == 1 then [ { key = 2; } { key = 3; } ]
-          else if item.key == 2 then [ { key = 3; } { key = 4; } ]
-          else [];
+        operator =
+          item:
+          if item.key == 1 then
+            [
+              { key = 2; }
+              { key = 3; }
+            ]
+          else if item.key == 2 then
+            [
+              { key = 3; }
+              { key = 4; }
+            ]
+          else
+            [ ];
       };
     params = 1;
     expected.toBe = [

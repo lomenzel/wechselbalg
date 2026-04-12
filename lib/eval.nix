@@ -10,14 +10,11 @@
 # Adapted from gestalt's eval.nix — made standalone (no module system).
 
 let
-  hasPrefix = prefix: str:
-    builtins.substring 0 (builtins.stringLength prefix) str == prefix;
+  hasPrefix = prefix: str: builtins.substring 0 (builtins.stringLength prefix) str == prefix;
 
-  mapAttrsToList = f: attrs:
-    builtins.map (name: f name attrs.${name}) (builtins.attrNames attrs);
+  mapAttrsToList = f: attrs: builtins.map (name: f name attrs.${name}) (builtins.attrNames attrs);
 
-  listToAttrs = list:
-    builtins.listToAttrs list;
+  listToAttrs = list: builtins.listToAttrs list;
 
   eval =
     {
@@ -30,21 +27,24 @@ let
       throw "wechselbalg eval: AST node has no _expr field"
 
     else if _expr == "literal" || _expr == "attrName" then
-      { success = true; inherit value; }
+      {
+        success = true;
+        inherit value;
+      }
 
     else if _expr == "var" then
       {
         success = builtins.hasAttr "closureEnvValue" value;
-        value =
-          if builtins.hasAttr "closureEnvValue" value
-          then value.closureEnvValue
-          else null;
+        value = if builtins.hasAttr "closureEnvValue" value then value.closureEnvValue else null;
       }
 
     else if _expr == "concatString/addition" then
       # Don't try to eagerly evaluate — the + operator can mix types
       # (string + int) which causes uncatchable errors.
-      { success = false; value = null; }
+      {
+        success = false;
+        value = null;
+      }
 
     else if _expr == "list" then
       let
@@ -57,7 +57,10 @@ let
       }
 
     else if _expr == "lambda" then
-      { success = false; value = null; }
+      {
+        success = false;
+        value = null;
+      }
 
     else if _expr == "attrSet" then
       let
@@ -68,19 +71,28 @@ let
         success = builtins.all (a: a.value.success) attrsEval;
       in
       if value.dynamicAttrs != [ ] then
-        { success = false; value = null; }
+        {
+          success = false;
+          value = null;
+        }
       else if value.recursive then
-        { success = false; value = null; }
+        {
+          success = false;
+          value = null;
+        }
       else
         {
           inherit success;
           value =
-            if success
-            then listToAttrs (builtins.map (a: {
-              inherit (a) name;
-              inherit (a.value) value;
-            }) attrsEval)
-            else null;
+            if success then
+              listToAttrs (
+                builtins.map (a: {
+                  inherit (a) name;
+                  inherit (a.value) value;
+                }) attrsEval
+              )
+            else
+              null;
         }
 
     else if _expr == "select" then
@@ -88,7 +100,14 @@ let
         pathEval = builtins.map (p: eval p) value.path;
         exprEval = eval value.expression;
         hasDefault = builtins.hasAttr "default" value;
-        defaultEval = if hasDefault then eval value.default else { success = true; value = null; };
+        defaultEval =
+          if hasDefault then
+            eval value.default
+          else
+            {
+              success = true;
+              value = null;
+            };
 
         success =
           builtins.all (p: p.success) pathEval
@@ -100,18 +119,40 @@ let
         foldResult =
           if success then
             builtins.foldl'
-              (acc: curr:
-                if !acc.continue || !acc.found then acc
+              (
+                acc: curr:
+                if !acc.continue || !acc.found then
+                  acc
                 else if builtins.isAttrs acc.value && builtins.hasAttr curr.value acc.value then
-                  { continue = true; value = acc.value.${curr.value}; found = true; }
+                  {
+                    continue = true;
+                    value = acc.value.${curr.value};
+                    found = true;
+                  }
                 else if hasDefault then
-                  { continue = false; value = defaultEval.value; found = true; }
+                  {
+                    continue = false;
+                    value = defaultEval.value;
+                    found = true;
+                  }
                 else
-                  { continue = false; value = null; found = false; }
+                  {
+                    continue = false;
+                    value = null;
+                    found = false;
+                  }
               )
-              { continue = true; value = exprEval.value; found = true; }
+              {
+                continue = true;
+                value = exprEval.value;
+                found = true;
+              }
               pathEval
-          else { value = null; found = false; };
+          else
+            {
+              value = null;
+              found = false;
+            };
       in
       {
         success = success && foldResult.found;
@@ -124,28 +165,32 @@ let
         thenEval = eval value.${"then"};
         elseEval = eval value.${"else"};
         success =
-          condEval.success
-          && (condEval.value -> thenEval.success)
-          && (!condEval.value -> elseEval.success);
+          condEval.success && (condEval.value -> thenEval.success) && (!condEval.value -> elseEval.success);
       in
       {
         inherit success;
-        value =
-          if success
-          then (if condEval.value then thenEval.value else elseEval.value)
-          else null;
+        value = if success then (if condEval.value then thenEval.value else elseEval.value) else null;
       }
 
     else if _expr == "let" then
-      { success = false; value = null; }
+      {
+        success = false;
+        value = null;
+      }
 
     else if _expr == "with" then
-      { success = false; value = null; }
+      {
+        success = false;
+        value = null;
+      }
 
     else if _expr == "call" then
       # Don't try to eagerly evaluate function calls — they may abort/throw
       # in ways that tryEval can't catch.  Let the walker handle them structurally.
-      { success = false; value = null; }
+      {
+        success = false;
+        value = null;
+      }
 
     else if _expr == "update" then
       let
@@ -235,7 +280,10 @@ let
 
     else if _expr == "path" then
       # Paths are impure — we cannot evaluate them at compile time in wechselbalg
-      { success = false; value = null; }
+      {
+        success = false;
+        value = null;
+      }
 
     else if _expr == "hasAttr" then
       let
@@ -248,26 +296,46 @@ let
         value =
           if success then
             (builtins.foldl'
-              (acc: pe:
-                if !acc.continue then acc
-                else if builtins.isAttrs acc.cur && builtins.hasAttr pe.value acc.cur
-                then { continue = true; cur = acc.cur.${pe.value}; }
-                else { continue = false; cur = null; })
-              { continue = true; cur = exprEval.value; }
+              (
+                acc: pe:
+                if !acc.continue then
+                  acc
+                else if builtins.isAttrs acc.cur && builtins.hasAttr pe.value acc.cur then
+                  {
+                    continue = true;
+                    cur = acc.cur.${pe.value};
+                  }
+                else
+                  {
+                    continue = false;
+                    cur = null;
+                  }
+              )
+              {
+                continue = true;
+                cur = exprEval.value;
+              }
               pathEval
             ).continue
-          else null;
+          else
+            null;
       }
 
     else if _expr == "primop" || _expr == "primopApp" then
-      { success = false; value = null; }
+      {
+        success = false;
+        value = null;
+      }
 
     else if _expr == "assert" then
       # Assertions can't be reliably evaluated at compile time
-      { success = false; value = null; }
+      {
+        success = false;
+        value = null;
+      }
 
     else
       throw "wechselbalg eval: unknown AST node type '${_expr}'";
 
 in
-  eval
+eval

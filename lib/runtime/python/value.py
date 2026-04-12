@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 
 class _Thunk:
     """Transparent lazy wrapper. Forces on any attribute access."""
+
     __slots__ = ("_fn", "_cached", "_forcing")
 
     _UNFORCED = object()
@@ -44,6 +45,7 @@ class _Thunk:
 
 class _LazySetProxy:
     """Lazy attrset — entries are thunks evaluated on first access and cached."""
+
     __slots__ = ("_factories", "_cache")
 
     def __init__(self, factories: dict[str, Callable[[], "Value"]]):
@@ -77,6 +79,7 @@ class _LazySetProxy:
 
 class _MergedSetProxy:
     """Lazy merge of two attrsets. Keys from ext shadow keys from base."""
+
     __slots__ = ("_base", "_ext")
 
     def __init__(self, base: "Value", ext: "Value"):
@@ -98,7 +101,9 @@ class _MergedSetProxy:
     def keys(self) -> list[str]:
         ext = object.__getattribute__(self, "_ext")
         base = object.__getattribute__(self, "_base")
-        return list(dict.fromkeys(list(base.as_set().keys()) + list(ext.as_set().keys())))
+        return list(
+            dict.fromkeys(list(base.as_set().keys()) + list(ext.as_set().keys()))
+        )
 
     def items(self):
         for k in self.keys():
@@ -150,7 +155,9 @@ class Value:
         return Value("lambda", v)
 
     @staticmethod
-    def lambda_with_formals(v: Callable[["Value"], "Value"], formals: dict[str, bool]) -> "Value":
+    def lambda_with_formals(
+        v: Callable[["Value"], "Value"], formals: dict[str, bool]
+    ) -> "Value":
         val = Value("lambda", v)
         val._formals = formals
         return val
@@ -431,7 +438,9 @@ class Value:
         return Value.from_string(s.join(e.as_string() for e in self.as_list()))
 
     def attr_names(self) -> "Value":
-        return Value.from_list([Value.from_string(k) for k in sorted(self.as_set().keys())])
+        return Value.from_list(
+            [Value.from_string(k) for k in sorted(self.as_set().keys())]
+        )
 
     def attr_values(self) -> "Value":
         s = self.as_set()
@@ -488,19 +497,23 @@ class Value:
                 right.append(e)
             else:
                 wrong.append(e)
-        return Value.from_set({
-            "right": Value.from_list(right),
-            "wrong": Value.from_list(wrong),
-        })
+        return Value.from_set(
+            {
+                "right": Value.from_list(right),
+                "wrong": Value.from_list(wrong),
+            }
+        )
 
     def sort(self, cmp: "Value") -> "Value":
         import functools
+
         def compare(a, b):
             if cmp.call(a).call(b).as_bool():
                 return -1
             if cmp.call(b).call(a).as_bool():
                 return 1
             return 0
+
         lst = list(self.as_list())
         lst.sort(key=functools.cmp_to_key(compare))
         return Value.from_list(lst)
@@ -514,7 +527,9 @@ class Value:
 
     @staticmethod
     def gen_list(func: "Value", count: int) -> "Value":
-        return Value.from_list([func.call(Value.from_int(i)) for i in range(int(count))])
+        return Value.from_list(
+            [func.call(Value.from_int(i)) for i in range(int(count))]
+        )
 
     def ceil(self) -> "Value":
         if self.is_int():
@@ -553,7 +568,9 @@ class Value:
         if t == "string":
             return Value.from_string(json.dumps(self.value))
         if t == "list":
-            return Value.from_string("[" + ",".join(e.to_json_().as_string() for e in self.value) + "]")
+            return Value.from_string(
+                "[" + ",".join(e.to_json_().as_string() for e in self.value) + "]"
+            )
         if t == "set":
             s = self.value
             pairs = []
@@ -584,7 +601,9 @@ class Value:
         if isinstance(v, list):
             return Value.from_list([Value._from_py_value(e) for e in v])
         if isinstance(v, dict):
-            return Value.from_set({k: Value._from_py_value(val) for k, val in v.items()})
+            return Value.from_set(
+                {k: Value._from_py_value(val) for k, val in v.items()}
+            )
         raise RuntimeError(f"wechselbalg: cannot convert Python value to Value")
 
     def __repr__(self) -> str:
@@ -602,11 +621,14 @@ def __wb_select_or(fn, default_val):
 def __wb_add(a, b):
     return a.add(b)
 
+
 def __wb_sub(a, b):
     return a.sub(b)
 
+
 def __wb_mul(a, b):
     return a.mul(b)
+
 
 def __wb_div(a, b):
     return a.div(b)
@@ -614,19 +636,24 @@ def __wb_div(a, b):
 
 # ── Primop helpers (complex operations that can't be one-liner lambdas) ───
 
+
 def __wb_trace(msg, val):
     print("[trace]", msg.as_string(), file=sys.stderr)
     return val
+
 
 def __wb_warn(msg, val):
     print("[warn]", msg.as_string(), file=sys.stderr)
     return val
 
+
 def __wb_abort(msg):
     raise RuntimeError("abort: " + msg.as_string())
 
+
 def __wb_throw(msg):
     raise RuntimeError(msg.as_string())
+
 
 def __wb_try_eval(e):
     try:
@@ -637,7 +664,10 @@ def __wb_try_eval(e):
             v = e
         return Value.from_set({"success": Value.from_bool(True), "value": v})
     except Exception:
-        return Value.from_set({"success": Value.from_bool(False), "value": Value.from_bool(False)})
+        return Value.from_set(
+            {"success": Value.from_bool(False), "value": Value.from_bool(False)}
+        )
+
 
 def __wb_split(regex_str, s):
     pattern = re.compile(regex_str.as_string())
@@ -645,20 +675,21 @@ def __wb_split(regex_str, s):
     parts = []
     last_end = 0
     for m in pattern.finditer(string):
-        parts.append(Value.from_string(string[last_end:m.start()]))
+        parts.append(Value.from_string(string[last_end : m.start()]))
         parts.append(Value.from_list([Value.from_string(m.group(0))]))
         last_end = m.end()
     parts.append(Value.from_string(string[last_end:]))
     return Value.from_list(parts)
 
+
 def __wb_match(regex_str, s):
     m = re.fullmatch(regex_str.as_string(), s.as_string())
     if m is None:
         return Value.null_()
-    return Value.from_list([
-        Value.null_() if g is None else Value.from_string(g)
-        for g in m.groups()
-    ])
+    return Value.from_list(
+        [Value.null_() if g is None else Value.from_string(g) for g in m.groups()]
+    )
+
 
 def __wb_zip_attrs_with(f, list_val):
     sets = [s.as_set() for s in list_val.as_list()]
@@ -669,21 +700,29 @@ def __wb_zip_attrs_with(f, list_val):
     factories = {}
     for k in all_keys:
         key = k
-        factories[key] = lambda key=key: f.call(Value.from_string(key)).call(Value.from_list([s[key] for s in sets if key in s]))
+        factories[key] = lambda key=key: f.call(Value.from_string(key)).call(
+            Value.from_list([s[key] for s in sets if key in s])
+        )
     return Value.lazy_set(factories)
+
 
 def __wb_parse_drv_name(s):
     string = s.as_string()
     m = re.match(r"^(.+?)-([0-9].*)$", string)
     if m:
-        return Value.from_set({
-            "name": Value.from_string(m.group(1)),
-            "version": Value.from_string(m.group(2)),
-        })
-    return Value.from_set({
-        "name": s,
-        "version": Value.from_string(""),
-    })
+        return Value.from_set(
+            {
+                "name": Value.from_string(m.group(1)),
+                "version": Value.from_string(m.group(2)),
+            }
+        )
+    return Value.from_set(
+        {
+            "name": s,
+            "version": Value.from_string(""),
+        }
+    )
+
 
 def __wb_compare_versions(a, b):
     pa = a.as_string().split(".")
@@ -698,15 +737,18 @@ def __wb_compare_versions(a, b):
             return Value.from_int(1)
     return Value.from_int(0)
 
+
 def __wb_split_version(s):
-    return Value.from_list([
-        Value.from_string(p) for p in re.findall(r"[0-9]+|[^0-9]+", s.as_string())
-    ])
+    return Value.from_list(
+        [Value.from_string(p) for p in re.findall(r"[0-9]+|[^0-9]+", s.as_string())]
+    )
 
 
 def __wb_function_args(f):
     if hasattr(f, "_function_args"):
-        return Value.from_set({k: Value.from_bool(v) for k, v in f._function_args.items()})
+        return Value.from_set(
+            {k: Value.from_bool(v) for k, v in f._function_args.items()}
+        )
     return Value.from_set({})
 
 
@@ -739,6 +781,7 @@ def __wb_generic_closure(args):
 
 def __wb_hash_string(algo, s):
     import hashlib
+
     text = s.as_string()
     algo_name = algo.as_string()
     if algo_name == "sha256":

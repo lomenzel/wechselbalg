@@ -18,17 +18,25 @@ in
   # ── basic: param overrides option default ──────────────────
   {
     description = "real evalModules: param overrides option default";
-    func = params:
+    func =
+      params:
       let
         result = evalModules {
           modules = [
-            ({ ... }: {
-              options.value = mkOption { type = types.int; default = 0; };
-              config.value = params;
-            })
+            (
+              { ... }:
+              {
+                options.value = mkOption {
+                  type = types.int;
+                  default = 0;
+                };
+                config.value = params;
+              }
+            )
           ];
         };
-      in result.config.value;
+      in
+      result.config.value;
     params = 42;
     expected.toBe = 42;
   }
@@ -36,16 +44,24 @@ in
   # ── default value: no config provided ──────────────────────
   {
     description = "real evalModules: default value; using lib in module";
-    func = params:
+    func =
+      params:
       let
         result = evalModules {
           modules = [
-            ({ lib, ... }: {
-              options.x = lib.mkOption { type = lib.types.int; default = 99; };
-            })
+            (
+              { lib, ... }:
+              {
+                options.x = lib.mkOption {
+                  type = lib.types.int;
+                  default = 99;
+                };
+              }
+            )
           ];
         };
-      in result.config.x + params;
+      in
+      result.config.x + params;
     params = 1;
     expected.toBe = 100;
   }
@@ -53,21 +69,35 @@ in
   # ── config fixpoint: module reads sibling config ───────────
   {
     description = "real evalModules: config fixpoint";
-    func = params:
+    func =
+      params:
       let
         result = evalModules {
           modules = [
-            ({ ... }: {
-              options.base = mkOption { type = types.int; default = 0; };
-              options.doubled = mkOption { type = types.int; default = 0; };
-            })
-            ({ config, ... }: {
-              config.base = params;
-              config.doubled = config.base * 2;
-            })
+            (
+              { ... }:
+              {
+                options.base = mkOption {
+                  type = types.int;
+                  default = 0;
+                };
+                options.doubled = mkOption {
+                  type = types.int;
+                  default = 0;
+                };
+              }
+            )
+            (
+              { config, ... }:
+              {
+                config.base = params;
+                config.doubled = config.base * 2;
+              }
+            )
           ];
         };
-      in result.config.doubled;
+      in
+      result.config.doubled;
     params = 7;
     expected.toBe = 14;
   }
@@ -75,23 +105,44 @@ in
   # ── option merge: two modules set the same list option ─────
   {
     description = "real evalModules: list option merge from two modules";
-    func = params:
+    func =
+      params:
       let
         result = evalModules {
           modules = [
-            ({ ... }: {
-              options.items = mkOption { type = types.listOf types.int; default = []; };
-            })
-            ({ ... }: {
-              config.items = [ 1 2 ];
-            })
-            ({ ... }: {
-              config.items = [ params ];
-            })
+            (
+              { ... }:
+              {
+                options.items = mkOption {
+                  type = types.listOf types.int;
+                  default = [ ];
+                };
+              }
+            )
+            (
+              { ... }:
+              {
+                config.items = [
+                  1
+                  2
+                ];
+              }
+            )
+            (
+              { ... }:
+              {
+                config.items = [ params ];
+              }
+            )
           ];
         };
-      in builtins.sort (p: q: p < q)  result.config.items;
+      in
+      builtins.sort (p: q: p < q) result.config.items;
     params = 3;
-    expected.toBe = [ 1 2 3 ];
+    expected.toBe = [
+      1
+      2
+      3
+    ];
   }
 ]

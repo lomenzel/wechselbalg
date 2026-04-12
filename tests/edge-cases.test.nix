@@ -126,7 +126,9 @@
       params:
       let
         # identity is warnIf-like: ignores msg when cond is false
-        warnIf = cond: msg: x: if cond then builtins.trace msg x else x;
+        warnIf =
+          cond: msg: x:
+          if cond then builtins.trace msg x else x;
       in
       warnIf false "test ${null}" params;
     params = 42;

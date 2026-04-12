@@ -6,7 +6,8 @@
 # language without access to the Nix store.
 
 let
-  check = value:
+  check =
+    value:
     let
       type = builtins.typeOf value;
     in
@@ -24,16 +25,29 @@ in
   assertPure = check;
 
   # Check without throwing. Returns { pure = bool; reason = string|null; }.
-  isPure = value:
+  isPure =
+    value:
     let
       type = builtins.typeOf value;
     in
     if type == "path" then
-      { pure = false; reason = "path values reference the filesystem"; }
+      {
+        pure = false;
+        reason = "path values reference the filesystem";
+      }
     else if type == "set" && value ? drvPath then
-      { pure = false; reason = "derivations cannot be translated"; }
+      {
+        pure = false;
+        reason = "derivations cannot be translated";
+      }
     else if type == "set" && value ? outPath then
-      { pure = false; reason = "store-path sets cannot be translated"; }
+      {
+        pure = false;
+        reason = "store-path sets cannot be translated";
+      }
     else
-      { pure = true; reason = null; };
+      {
+        pure = true;
+        reason = null;
+      };
 }

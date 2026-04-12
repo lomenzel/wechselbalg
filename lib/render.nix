@@ -17,7 +17,8 @@ let
   ir = import ./ir.nix;
 
   # Render a single IR node using the backend.
-  renderNode = backend: node:
+  renderNode =
+    backend: node:
     if node._t == "int" then
       backend.renderInt node.value
 
@@ -44,9 +45,9 @@ let
         renderedBindings = builtins.mapAttrs (_: renderNode backend) node.bindings;
         renderedBody = renderNode backend node.body;
         localDefNames = builtins.attrNames node.localDefs;
-        renderedLocalDefs = builtins.map
-          (name: renderDef backend name node.localDefs.${name})
-          localDefNames;
+        renderedLocalDefs = builtins.map (
+          name: renderDef backend name node.localDefs.${name}
+        ) localDefNames;
       in
       backend.renderLet renderedBindings renderedBody renderedLocalDefs localDefNames
 
@@ -60,10 +61,9 @@ let
       backend.renderVar node.name
 
     else if node._t == "if" then
-      backend.renderIf
-        (renderNode backend node.cond)
-        (renderNode backend node.then_)
-        (renderNode backend node.else_)
+      backend.renderIf (renderNode backend node.cond) (renderNode backend node.then_) (
+        renderNode backend node.else_
+      )
 
     else if node._t == "eq" then
       backend.renderEq (renderNode backend node.a) (renderNode backend node.b)
@@ -81,58 +81,58 @@ let
       backend.renderConcatLists (renderNode backend node.a) (renderNode backend node.b)
 
     else if node._t == "select" then
-      backend.renderSelect
-        (renderNode backend node.expr)
-        (builtins.map (renderNode backend) node.path)
-        (if node.default != null then renderNode backend node.default else null)
+      backend.renderSelect (renderNode backend node.expr) (builtins.map (renderNode backend) node.path) (
+        if node.default != null then renderNode backend node.default else null
+      )
 
     else if node._t == "primop" then
-      if builtins.hasAttr node.name backend.primops
-      then backend.primops.${node.name}
-      else if builtins.hasAttr "renderUnknownPrimop" backend
-      then builtins.trace "wechselbalg warning: primop '${node.name}' is not implemented in ${backend.name} — will throw at runtime" (backend.renderUnknownPrimop node.name)
-      else throw "wechselbalg: backend '${backend.name}' does not implement primop '${node.name}'"
+      if builtins.hasAttr node.name backend.primops then
+        backend.primops.${node.name}
+      else if builtins.hasAttr "renderUnknownPrimop" backend then
+        builtins.trace "wechselbalg warning: primop '${node.name}' is not implemented in ${backend.name} — will throw at runtime" (
+          backend.renderUnknownPrimop node.name
+        )
+      else
+        throw "wechselbalg: backend '${backend.name}' does not implement primop '${node.name}'"
 
     else
       throw "wechselbalg render: unknown IR node type '${node._t}'";
 
-
   # Render function parameters for a definition
-  renderParams = backend: params:
-    backend.renderParams params;
+  renderParams = backend: params: backend.renderParams params;
 
   # Render a complete function definition.
   # Pre-renders default values in formals so the backend gets strings.
   # Also renders any localDefs (nested lambdas scoped to this function).
-  renderDef = backend: name: def:
+  renderDef =
+    backend: name: def:
     let
       params = def.params // {
         formals =
-          if def.params.formals != null
-          then builtins.map (f: f // {
-            default =
-              if f.hasDefault
-              then renderNode backend f.default
-              else null;
-          }) def.params.formals
-          else null;
+          if def.params.formals != null then
+            builtins.map (
+              f:
+              f
+              // {
+                default = if f.hasDefault then renderNode backend f.default else null;
+              }
+            ) def.params.formals
+          else
+            null;
       };
-      localDefNames = builtins.attrNames (def.localDefs or {});
-      renderedLocalDefs = builtins.map
-        (n: renderDef backend n def.localDefs.${n})
-        localDefNames;
+      localDefNames = builtins.attrNames (def.localDefs or { });
+      renderedLocalDefs = builtins.map (n: renderDef backend n def.localDefs.${n}) localDefNames;
     in
     backend.renderFuncDef name params (renderNode backend def.body) renderedLocalDefs localDefNames;
 
   # ── Main entry point ────────────────────────────────────────────
   # Takes a backend and a walk result { ir; defs; } and produces
   # the final code string.
-  render = backend: walkResult:
+  render =
+    backend: walkResult:
     let
       defNames = builtins.attrNames walkResult.defs;
-      renderedDefs = builtins.map
-        (name: renderDef backend name walkResult.defs.${name})
-        defNames;
+      renderedDefs = builtins.map (name: renderDef backend name walkResult.defs.${name}) defNames;
       renderedExpr = renderNode backend walkResult.ir;
     in
     backend.renderProgram {

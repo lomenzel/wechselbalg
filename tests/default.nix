@@ -341,7 +341,7 @@ let
           buildPhase = ''
             echo "=== Running ${toString (builtins.length results)} wechselbalg tests (${name}) ==="
             cp ${testFile} test.cpp
-            g++ -std=c++17 -O2 -o test test.cpp
+            g++ -o test test.cpp
             ./test
           '';
           inherit buildInputs;
@@ -471,8 +471,14 @@ let
           {
             pass = false;
             desc = test.description;
-            got = { success = true; value = "translation failed"; };
-            expected = { success = true; value = "successful translation"; };
+            got = {
+              success = true;
+              value = "translation failed";
+            };
+            expected = {
+              success = true;
+              value = "successful translation";
+            };
           }
         else
           let
@@ -491,8 +497,14 @@ let
             {
               pass = false;
               desc = test.description;
-              got = { success = true; value = "eval failed"; };
-              expected = { success = true; value = "successful eval"; };
+              got = {
+                success = true;
+                value = "eval failed";
+              };
+              expected = {
+                success = true;
+                value = "successful eval";
+              };
             }
           else if tryResult.value then
             {
