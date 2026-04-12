@@ -483,24 +483,30 @@ let
 
         # ── Walk dynamic attrs ─────────────────────────────────────
         # Each dynamic attr has { name = <ast>; value = <ast>; }.
-        # Desugar to: listToAttrs [ { name = ...; value = ...; } ... ]
+        # Nix silently drops entries whose name evaluates to null
+        # (e.g. `{ ${null} = 1; }` yields `{}`), so each entry is
+        # wrapped in `if name != null then listToAttrs [...] else {}`.
         hasDynamic = ast.value.dynamicAttrs != [ ];
         dynamicResult = builtins.foldl'
           (acc: dyn:
             let
               nameR = walkAST dyn.name acc.known;
               valueR = walkAST dyn.value nameR.known;
-            in {
-              pairs = acc.pairs ++ [
-                (ir.attrs { name = nameR.ir; value = valueR.ir; })
+              pair = ir.primopApp "listToAttrs" [
+                (ir.list [ (ir.attrs { name = nameR.ir; value = valueR.ir; }) ])
               ];
+              # Nix drops dynamic attrs whose name is null — guard each entry
+              guarded = ir.if_ (ir.eq nameR.ir ir.null_) (ir.attrs {}) pair;
+            in {
+              parts = acc.parts ++ [ guarded ];
               defs = mergeDefs (mergeDefs acc.defs nameR.defs) valueR.defs;
               known = valueR.known;
             })
-          { pairs = []; defs = staticResult.defs; known = staticResult.known; }
+          { parts = []; defs = staticResult.defs; known = staticResult.known; }
           ast.value.dynamicAttrs;
 
-        dynamicIR = ir.primopApp "listToAttrs" [ (ir.list dynamicResult.pairs) ];
+        # Merge all guarded dynamic entries via //
+        dynamicIR = builtins.foldl' ir.update (builtins.head dynamicResult.parts) (builtins.tail dynamicResult.parts);
         hasStatic = names != [ ];
       in
       if ast.value.recursive then

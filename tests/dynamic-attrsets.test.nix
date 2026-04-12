@@ -65,4 +65,25 @@
     params = { key = "z"; val = 100; };
     expected.toBe = 100;
   }
+  {
+    description = "dynamic attr with null name is dropped";
+    func = params:
+      { ${params} = 1; a = 2; };
+    params = null;
+    expected.toBe = { a = 2; };
+  }
+  {
+    description = "all-null dynamic attrs yield empty set";
+    func = params:
+      { ${params} = 1; };
+    params = null;
+    expected.toBe = {};
+  }
+  {
+    description = "only non-null dynamic attrs survive";
+    func = params:
+      { ${params.k1} = 1; ${params.k2} = 2; };
+    params = { k1 = null; k2 = "b"; };
+    expected.toBe = { b = 2; };
+  }
 ]
