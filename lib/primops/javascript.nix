@@ -214,6 +214,26 @@
     })
   '';
 
+  genericClosure = ''
+    Value.lambda(args => {
+      const startSet = args.get("startSet").asList();
+      const op = args.get("operator");
+      const result = [];
+      const seen = new Set();
+      const work = [...startSet];
+      while (work.length > 0) {
+        const item = work.shift();
+        const key = item.get("key").toJSON_().asString();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(item);
+        const newItems = op.call(item).asList();
+        work.push(...newItems);
+      }
+      return Value.fromList(result);
+    })
+  '';
+
   null = "Value.null_()";
   true = "Value.fromBool(true)";
   false = "Value.fromBool(false)";

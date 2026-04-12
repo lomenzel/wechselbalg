@@ -99,5 +99,7 @@
 
   hashString = "Value.lambda_(lambda algo: Value.lambda_(lambda s: __wb_hash_string(algo, s)))";
 
+  genericClosure = "Value.lambda_(lambda args: __wb_generic_closure(args))";
+
   null = "Value.null_()";
 }

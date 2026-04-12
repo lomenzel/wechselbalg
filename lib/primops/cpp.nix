@@ -410,4 +410,26 @@
       });
     })
   '';
+
+  genericClosure = ''
+    Value::lambda([](Value args) {
+      auto startSet = args["startSet"].asList();
+      auto op = args["operator"];
+      Value::List result;
+      std::set<std::string> seen;
+      std::deque<Value> work(startSet.begin(), startSet.end());
+      while (!work.empty()) {
+        auto item = work.front();
+        work.pop_front();
+        auto key = item["key"].toJSON();
+        if (seen.count(key)) continue;
+        seen.insert(key);
+        result.push_back(item);
+        auto expanded = (op)(item);
+        const auto& newItems = expanded.asList();
+        work.insert(work.end(), newItems.begin(), newItems.end());
+      }
+      return Value::fromList(std::move(result));
+    })
+  '';
 }

@@ -475,6 +475,7 @@ struct Value {
   }
 
   std::string toJSON() const {
+    force();
     switch (type) {
       case Type::Null:   return "null";
       case Type::Bool:   return asBool() ? "true" : "false";
