@@ -661,16 +661,16 @@ def __wb_match(regex_str, s):
     ])
 
 def __wb_zip_attrs_with(f, list_val):
-    combined: dict[str, list] = {}
-    for s in list_val.as_list():
-        for k in s.as_set().keys():
-            if k not in combined:
-                combined[k] = []
-            combined[k].append(s.as_set()[k])
-    r = {}
-    for k, v in combined.items():
-        r[k] = f.call(Value.from_string(k)).call(Value.from_list(v))
-    return Value.from_set(r)
+    sets = [s.as_set() for s in list_val.as_list()]
+    all_keys: dict[str, bool] = {}
+    for s in sets:
+        for k in s.keys():
+            all_keys[k] = True
+    factories = {}
+    for k in all_keys:
+        key = k
+        factories[key] = lambda key=key: f.call(Value.from_string(key)).call(Value.from_list([s[key] for s in sets if key in s]))
+    return Value.lazy_set(factories)
 
 def __wb_parse_drv_name(s):
     string = s.as_string()

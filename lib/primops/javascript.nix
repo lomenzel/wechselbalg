@@ -144,17 +144,22 @@
   mapAttrs = "Value.lambda(f => Value.lambda(s => s.mapAttrs(f)))";
   zipAttrsWith = ''
     Value.lambda(f => Value.lambda(list => {
-      const combined = {};
-      for (const s of list.asList()) {
-        for (const k of Object.keys(s.asSet())) {
-          if (!(k in combined)) combined[k] = [];
-          combined[k].push(s.asSet()[k]);
-        }
+      const sets = list.asList().map(s => s.asSet());
+      const allKeys = new Set();
+      for (const s of sets)
+        for (const k of Object.keys(s))
+          allKeys.add(k);
+      const factories = {};
+      for (const k of allKeys) {
+        const key = k;
+        factories[key] = () => {
+          const vals = [];
+          for (const s of sets)
+            if (key in s) vals.push(s[key]);
+          return f.call(Value.fromString(key)).call(Value.fromList(vals));
+        };
       }
-      const r = {};
-      for (const k of Object.keys(combined))
-        r[k] = f.call(Value.fromString(k)).call(Value.fromList(combined[k]));
-      return Value.fromSet(r);
+      return Value.lazySet(factories);
     }))
   '';
 

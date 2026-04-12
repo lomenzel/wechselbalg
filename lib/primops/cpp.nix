@@ -297,6 +297,34 @@
     })
   '';
 
+  zipAttrsWith = ''
+    Value::lambda([](Value f) {
+      return Value::lambda([f](Value list) {
+        auto sets = list.asList();
+        std::set<std::string> allKeys;
+        for (const auto& s : sets)
+          for (const auto& kv : s.asSet())
+            allKeys.insert(kv.first);
+        Value::Set r;
+        for (const auto& k : allKeys) {
+          auto key = k;
+          auto func = f;
+          auto setsRef = sets;
+          r[key] = Value::thunk([func, key, setsRef]() {
+            Value::List vals;
+            for (const auto& s : setsRef) {
+              const auto& m = s.asSet();
+              auto it = m.find(key);
+              if (it != m.end()) vals.push_back(it->second);
+            }
+            return func(Value::fromString(key))(Value::fromList(std::move(vals)));
+          });
+        }
+        return Value::fromSet(std::move(r));
+      });
+    })
+  '';
+
   ceil = "Value::lambda([](Value x) { return Value::fromInt(x.ceil()); })";
   floor = "Value::lambda([](Value x) { return Value::fromInt(x.floor()); })";
 

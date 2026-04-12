@@ -22,7 +22,7 @@ in
       let
         result = evalModules {
           modules = [
-            ({ lib, ... }: {
+            ({ ... }: {
               options.value = mkOption { type = types.int; default = 0; };
               config.value = params;
             })
@@ -35,13 +35,13 @@ in
 
   # ── default value: no config provided ──────────────────────
   {
-    description = "real evalModules: default value";
+    description = "real evalModules: default value; using lib in module";
     func = params:
       let
         result = evalModules {
           modules = [
             ({ lib, ... }: {
-              options.x = mkOption { type = types.int; default = 99; };
+              options.x = lib.mkOption { type = lib.types.int; default = 99; };
             })
           ];
         };
@@ -57,7 +57,7 @@ in
       let
         result = evalModules {
           modules = [
-            ({ lib, ... }: {
+            ({ ... }: {
               options.base = mkOption { type = types.int; default = 0; };
               options.doubled = mkOption { type = types.int; default = 0; };
             })
@@ -70,5 +70,28 @@ in
       in result.config.doubled;
     params = 7;
     expected.toBe = 14;
+  }
+
+  # ── option merge: two modules set the same list option ─────
+  {
+    description = "real evalModules: list option merge from two modules";
+    func = params:
+      let
+        result = evalModules {
+          modules = [
+            ({ ... }: {
+              options.items = mkOption { type = types.listOf types.int; default = []; };
+            })
+            ({ ... }: {
+              config.items = [ 1 2 ];
+            })
+            ({ ... }: {
+              config.items = [ params ];
+            })
+          ];
+        };
+      in builtins.sort (p: q: p < q)  result.config.items;
+    params = 3;
+    expected.toBe = [ 1 2 3 ];
   }
 ]
