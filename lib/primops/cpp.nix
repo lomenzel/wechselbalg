@@ -432,4 +432,12 @@
       return Value::fromList(std::move(result));
     })
   '';
+
+  addErrorContext = ''
+    Value::lambda([](Value) {
+      return Value::lambda([](Value val) {
+        return val;
+      });
+    })
+  '';
 }

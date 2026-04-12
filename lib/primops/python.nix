@@ -101,5 +101,7 @@
 
   genericClosure = "Value.lambda_(lambda args: __wb_generic_closure(args))";
 
+  addErrorContext = "Value.lambda_(lambda ctx: Value.lambda_(lambda val: val))";
+
   null = "Value.null_()";
 }

@@ -234,6 +234,8 @@
     })
   '';
 
+  addErrorContext = "Value.lambda(ctx => Value.lambda(val => val))";
+
   null = "Value.null_()";
   true = "Value.fromBool(true)";
   false = "Value.fromBool(false)";
