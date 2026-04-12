@@ -83,7 +83,8 @@ let
     renderVar = name: sanitize name;
 
     # ── Application ─────────────────────────────────────────────
-    renderApply = fn: arg: "${fn}.call(${arg})";
+    # Arguments are thunked to emulate Nix's call-by-need semantics.
+    renderApply = fn: arg: "${fn}.call(Value.thunk(lambda: ${arg}))";
 
     # ── Control flow ────────────────────────────────────────────
     renderIf = cond: then_: else_: "(${then_} if ${cond}.as_bool() else ${else_})";

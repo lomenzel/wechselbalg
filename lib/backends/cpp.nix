@@ -139,7 +139,8 @@ let
     renderVar = name: "(*${sanitize name})";
 
     # ── Application ─────────────────────────────────────────────
-    renderApply = fn: arg: "(${fn})(${arg})";
+    # Arguments are thunked to emulate Nix's call-by-need semantics.
+    renderApply = fn: arg: "(${fn})(Value::thunk([=]() -> Value { return ${arg}; }))";
 
     # ── Control flow ────────────────────────────────────────────
     renderIf =

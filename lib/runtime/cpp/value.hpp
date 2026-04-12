@@ -360,6 +360,7 @@ struct Value {
   }
 
   Value removeAttrs(const Value& names) const {
+    force();
     Set s = std::get<Set>(value);
     for (const auto& n : names.asList()) s.erase(n.asString());
     return fromSet(std::move(s));
@@ -422,6 +423,7 @@ struct Value {
   }
 
   Value sort(const Value& cmp) const {
+    force();
     List r = std::get<List>(value);
     std::sort(r.begin(), r.end(), [&](const Value& a, const Value& b) {
       return cmp(a)(b).asBool();
@@ -454,16 +456,19 @@ struct Value {
   }
 
   long long ceil() const {
+    force();
     if (type == Type::Int) return asInt();
     return static_cast<long long>(std::ceil(asFloat()));
   }
 
   long long floor() const {
+    force();
     if (type == Type::Int) return asInt();
     return static_cast<long long>(std::floor(asFloat()));
   }
 
   std::string toString() const {
+    force();
     switch (type) {
       case Type::Null:   return "";
       case Type::Bool:   return asBool() ? "1" : "";

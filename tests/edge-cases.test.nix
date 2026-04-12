@@ -114,4 +114,44 @@
     params = 5;
     expected.toBe = 6;
   }
+
+  # ── Lazy function arguments ────────────────────────────────────
+  # In Nix, function arguments are call-by-need — they're only evaluated
+  # when the function body actually uses them.  These tests verify that
+  # translated code correctly thunks call arguments.
+
+  {
+    description = "lazy arg: unused argument with string + null is not forced";
+    func =
+      params:
+      let
+        # identity is warnIf-like: ignores msg when cond is false
+        warnIf = cond: msg: x: if cond then builtins.trace msg x else x;
+      in
+      warnIf false "test ${null}" params;
+    params = 42;
+    expected.toBe = 42;
+  }
+  {
+    description = "lazy arg: unused argument with throw is not forced";
+    func =
+      params:
+      let
+        f = x: y: x;
+      in
+      f params (throw "this should never be evaluated");
+    params = 7;
+    expected.toBe = 7;
+  }
+  {
+    description = "lazy arg: used argument is correctly forced";
+    func =
+      params:
+      let
+        f = x: y: x + y;
+      in
+      f params 10;
+    params = 5;
+    expected.toBe = 15;
+  }
 ]
