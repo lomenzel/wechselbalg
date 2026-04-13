@@ -429,7 +429,8 @@ struct Value {
   Value concatMap(const Value &func) const {
     List r;
     for (const auto &e : asList()) {
-      const auto &sub = func(e).asList();
+      Value mapped = func(e);
+      const auto &sub = mapped.asList();
       r.insert(r.end(), sub.begin(), sub.end());
     }
     return fromList(std::move(r));
