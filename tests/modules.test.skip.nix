@@ -15,35 +15,8 @@ let
   inherit (lib) mkOption types;
 in
 [
-  # ── basic: param overrides option default ──────────────────
   {
-    description = "real evalModules: param overrides option default";
-    func =
-      params:
-      let
-        result = evalModules {
-          modules = [
-            (
-              { ... }:
-              {
-                options.value = mkOption {
-                  type = types.int;
-                  default = 0;
-                };
-                config.value = params;
-              }
-            )
-          ];
-        };
-      in
-      result.config.value;
-    params = 42;
-    expected.toBe = 42;
-  }
-
-  # ── default value: no config provided ──────────────────────
-  {
-    description = "real evalModules: default value; using lib in module";
+    description = "evalModules";
     func =
       params:
       let
@@ -52,97 +25,53 @@ in
             (
               { lib, ... }:
               {
-                options.x = lib.mkOption {
+                options.unset = lib.mkOption {
                   type = lib.types.int;
-                  default = 99;
+                  default = 99 + params.p1;
                 };
-              }
-            )
-          ];
-        };
-      in
-      result.config.x + params;
-    params = 1;
-    expected.toBe = 100;
-  }
-
-  # ── config fixpoint: module reads sibling config ───────────
-  {
-    description = "real evalModules: config fixpoint";
-    func =
-      params:
-      let
-        result = evalModules {
-          modules = [
-            (
-              { ... }:
-              {
-                options.base = mkOption {
-                  type = types.int;
+                options.base = lib.mkOption {
+                  type = lib.types.int;
                   default = 0;
                 };
-                options.doubled = mkOption {
-                  type = types.int;
+                options.doubled = lib.mkOption {
+                  type = lib.types.int;
                   default = 0;
                 };
-              }
-            )
-            (
-              { config, ... }:
-              {
-                config.base = params;
-                config.doubled = config.base * 2;
-              }
-            )
-          ];
-        };
-      in
-      result.config.doubled;
-    params = 7;
-    expected.toBe = 14;
-  }
-
-  # ── option merge: two modules set the same list option ─────
-  {
-    description = "real evalModules: list option merge from two modules";
-    func =
-      params:
-      let
-        result = evalModules {
-          modules = [
-            (
-              { ... }:
-              {
-                options.items = mkOption {
-                  type = types.listOf types.int;
-                  default = [ ];
+                options.list = lib.mkOption {
+                  type = lib.types.listOf lib.types.int;
                 };
-              }
-            )
-            (
-              { ... }:
-              {
-                config.items = [
+                config.list = [
                   1
                   2
                 ];
               }
             )
             (
-              { ... }:
+              { config, ... }:
               {
-                config.items = [ params ];
+                base = params.p2;
+                doubled = config.base * 2;
+                list = [ params.p3 ];
               }
             )
           ];
         };
       in
-      builtins.sort (p: q: p < q) result.config.items;
-    params = 3;
-    expected.toBe = [
-      1
-      2
-      3
-    ];
+      result.config;
+    params = {
+      p1 = 1;
+      p2 = 7;
+      p3 = 3;
+    };
+    expected.toBe = {
+      unset = 100;
+      base = 7;
+      doubled = 14;
+      list = [
+        3
+        1
+        2
+      ];
+    };
   }
 ]

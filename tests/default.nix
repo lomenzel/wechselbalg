@@ -149,6 +149,9 @@ let
     else
       throw "wechselbalg test: cannot convert Nix type '${type}' to Nix literal";
 
+  # TypeScript uses the same literal syntax as JavaScript.
+  nixToTS = nixToJS;
+
   # ── Backend definitions ─────────────────────────────────────
   # Each backend provides everything needed to build and run tests.
   # To add a new backend, add an entry here with:
@@ -247,6 +250,101 @@ let
           buildPhase = ''
             echo "=== Running ${toString (builtins.length results)} wechselbalg tests (${name}) ==="
             node ${testFile}
+          '';
+          inherit buildInputs;
+        };
+    };
+
+    # ── TypeScript backend ──────────────────────────────────────
+    typescript = rec {
+      name = "typescript";
+      translate = wechselbalg.toTS;
+      nixToLiteral = nixToTS;
+
+      mkTestBlock =
+        test:
+        let
+          tryCode = builtins.tryEval (translate test.func);
+        in
+        if !tryCode.success then
+          {
+            block = ''
+              // Test: ${test.description}
+              {
+                throw new Error("FAIL: " + ${builtins.toJSON test.description} + "\n  Reason: translation failed");
+              }
+            '';
+          }
+        else
+          let
+            code = tryCode.value;
+            params = nixToLiteral test.params;
+            expected = nixToLiteral test.expected.toBe;
+          in
+          {
+            block = ''
+              // Test: ${test.description}
+              {
+                const func = ${code};
+                const params = ${params};
+                const expected = ${expected};
+                const result = func.call(params);
+                if (!Value._deepEq(result, expected)) {
+                  const r = JSON.stringify(result, (k, v) => typeof v === "bigint" ? v.toString() + "n" : v);
+                  const e = JSON.stringify(expected, (k, v) => typeof v === "bigint" ? v.toString() + "n" : v);
+                  throw new Error("FAIL: " + ${builtins.toJSON test.description} + "\n  Expected: " + e + "\n  Got:      " + r);
+                }
+                console.log("PASS: " + ${builtins.toJSON test.description});
+              }
+            '';
+          };
+
+      harness =
+        results:
+        let
+          runtime = wechselbalg.tsRuntime;
+        in
+        ''
+          declare var process: { exit(code: number): never };
+
+          ${runtime}
+
+          let _passed = 0;
+          let _failed = 0;
+
+          ${lib.concatStringsSep "\n" (
+            builtins.map (r: ''
+              try {
+                ${r.block}
+                _passed++;
+              } catch(e: any) {
+                console.error(e.message || e);
+                _failed++;
+              }
+            '') results
+          )}
+
+          console.log("\n" + _passed + " passed, " + _failed + " failed, " + (_passed + _failed) + " total");
+          if (_failed > 0) process.exit(1);
+        '';
+
+      buildInputs = [
+        pkgs.typescript
+        pkgs.nodejs
+      ];
+
+      mkDrv =
+        tests:
+        let
+          results = builtins.map mkTestBlock tests;
+          testFile = pkgs.writeText "wechselbalg-tests.ts" (harness results);
+        in
+        {
+          buildPhase = ''
+            echo "=== Running ${toString (builtins.length results)} wechselbalg tests (${name}) ==="
+            cp ${testFile} test.ts
+            tsc --target ES2020 --moduleResolution node test.ts
+            node test.js
           '';
           inherit buildInputs;
         };

@@ -15,6 +15,7 @@ let
 
   backends = {
     javascript = import ./backends/javascript.nix;
+    typescript = import ./backends/typescript.nix;
     cpp = import ./backends/cpp.nix;
     python = import ./backends/python.nix;
     nix = import ./backends/nix.nix;
@@ -57,6 +58,12 @@ let
       lang = "python";
       inherit value;
     };
+  toTS =
+    value:
+    translate {
+      lang = "typescript";
+      inherit value;
+    };
   toNix =
     value:
     translate {
@@ -69,6 +76,7 @@ in
   inherit
     translate
     toJS
+    toTS
     toCpp
     toPython
     toNix
@@ -81,6 +89,10 @@ in
   # The JS Value class — users include this before using toJS output.
   # Usage: write to file, <script src="value.js"> before generated code.
   jsRuntime = builtins.readFile ./runtime/js/value.js;
+
+  # The TS Value class — users include this before using toTS output.
+  # Usage: write to file, import or inline before generated code.
+  tsRuntime = builtins.readFile ./runtime/ts/value.ts;
 
   # The Python Value class — users import this before using toPython output.
   # Usage: write to file, exec(open("value.py").read()) before generated code.

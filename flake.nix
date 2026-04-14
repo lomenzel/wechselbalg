@@ -1,5 +1,5 @@
 {
-  description = "Wechselbalg — translate Nix values to JavaScript, C++, Nix, and more";
+  description = "Wechselbalg — translate Nix values to JavaScript, TypeScript, C++, Nix, and more";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs";
     treefmt.url = "github:numtide/treefmt-nix";
@@ -42,11 +42,13 @@
           lib = prev.lib // {
             inherit (self.lib)
               toJS
+              toTS
               toCpp
               toPython
               toNix
               cppRuntime
               jsRuntime
+              tsRuntime
               pythonRuntime
               ;
           };

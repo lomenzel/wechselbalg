@@ -12,6 +12,29 @@
 let
   join = sep: list: builtins.concatStringsSep sep list;
 
+  hasPrefix = prefix: str: builtins.substring 0 (builtins.stringLength prefix) str == prefix;
+
+  # Detect rendered expressions that are cheap/pure and can't fail.
+  # These don't need thunk wrapping for lazy evaluation.
+  # Used by renderLet (let-bindings) and renderAttrs (attrset entries).
+  # Must NOT include compound values (fromSet/fromList) because
+  # let-bindings may have forward references that require lazy init.
+  isCheapExpr =
+    str:
+    hasPrefix "Value::fromInt(" str
+    || hasPrefix "Value::fromFloat(" str
+    || hasPrefix "Value::fromBool(" str
+    || hasPrefix "Value::fromString(" str
+    || str == "Value::null_()"
+    || hasPrefix "(*" str
+    || hasPrefix "__wb_primop_" str
+    || hasPrefix "__wb_unknown_primop(" str;
+
+  # Like isCheapExpr but also includes pure compound constructors.
+  # Safe for renderApply where evaluation order doesn't matter.
+  isPureExpr =
+    str: isCheapExpr str || hasPrefix "Value::fromSet(" str || hasPrefix "Value::fromList(" str;
+
   sanitize =
     name:
     let
@@ -77,17 +100,15 @@ let
     in
     if builtins.elem cleaned reserved then "__wb_rsv_${cleaned}" else cleaned;
 
+  cppPrimopDefs = import ../primops/cpp.nix;
+
   backend = {
     name = "cpp";
     extension = "cpp";
 
     # Unknown primops become runtime errors so translation proceeds.
-    renderUnknownPrimop = name: ''
-      Value::lambda([](Value) -> Value 
-      { 
-        throw std::runtime_error(\"wechselbalg: primop '${name}' is not implemented in C++\"); 
-      })
-    '';
+    # Uses a factory function defined once in the program preamble.
+    renderUnknownPrimop = name: "__wb_unknown_primop(${builtins.toJSON name})";
 
     # ── Literals ────────────────────────────────────────────────
     renderInt = value: "Value::fromInt(${toString value})";
@@ -97,18 +118,29 @@ let
     renderNull = "Value::null_()";
 
     # ── Collections ─────────────────────────────────────────────
-    renderList = elements: "Value::fromList({${join ", " elements}})";
+    renderList =
+      elements:
+      if builtins.length elements > 4 then
+        "Value::fromList({\n${join ",\n" elements}\n})"
+      else
+        "Value::fromList({${join ", " elements}})";
 
     renderAttrs =
       entries:
       let
-
         names = builtins.attrNames entries;
         pairs = builtins.map (
-          name: "{${builtins.toJSON name}, Value::thunk([=]() -> Value { return ${entries.${name}}; })}"
+          name:
+          let
+            val = entries.${name};
+          in
+          if isCheapExpr val then
+            "{${builtins.toJSON name}, ${val}}"
+          else
+            "{${builtins.toJSON name}, Value::thunk([=]() -> Value {\n  return ${val};\n})}"
         ) names;
       in
-      "Value::fromSet({${join ", " pairs}})";
+      "Value::fromSet({\n${join ",\n" pairs}\n})";
 
     # ── Let bindings (thunked for recursive scoping) ────────────
     renderLet =
@@ -122,7 +154,11 @@ let
         );
         defsBlock = if localDefs == [ ] then [ ] else localDefs;
         assigns = builtins.map (
-          name: "*${sanitize name} = Value::thunk([=]() -> Value { return ${bindings.${name}}; });"
+          name:
+          if isCheapExpr bindings.${name} then
+            "*${sanitize name} = ${bindings.${name}};"
+          else
+            "*${sanitize name} = Value::thunk([=]() -> Value {\n  return ${bindings.${name}};\n});"
         ) names;
         lines = fwdDecls ++ defsBlock ++ assigns;
       in
@@ -138,8 +174,14 @@ let
     renderVar = name: "(*${sanitize name})";
 
     # ── Application ─────────────────────────────────────────────
-    # Arguments are thunked to emulate Nix's call-by-need semantics.
-    renderApply = fn: arg: "(${fn})(Value::thunk([=]() -> Value { return ${arg}; }))";
+    # Arguments are thunked to emulate Nix's call-by-need semantics,
+    # unless the argument is a pure expression that can't fail.
+    renderApply =
+      fn: arg:
+      if isPureExpr arg then
+        "(${fn})(${arg})"
+      else
+        "(${fn})(Value::thunk([=]() -> Value {\n  return ${arg};\n}))";
 
     # ── Control flow ────────────────────────────────────────────
     renderIf =
@@ -184,14 +226,50 @@ let
 
         # Parameters are shared_ptr<Value> so nested lambdas can
         # safely capture them after this call frame returns.
+        # Formal parameters need forward declarations because defaults
+        # can reference other formals in any order (Nix formals are lazy).
         identifierBinding =
           if identifier != null then
             "auto ${sanitize identifier} = std::make_shared<Value>(${paramName});"
           else
             "";
 
+        # Check if any default expression references another formal name.
+        # If so, we need the two-pass (forward-declare + assign) pattern.
+        needsFwdDecl =
+          formals != null
+          && builtins.any (
+            f:
+            f.hasDefault
+            && builtins.any (
+              other:
+              other.name != f.name && builtins.match ".*\\(\\*${sanitize other.name}\\).*" f.default != null
+            ) formals
+          ) formals;
+
+        formalsFwdDecls =
+          if formals != null && needsFwdDecl then
+            join "\n    " (builtins.map (f: "auto ${sanitize f.name} = std::make_shared<Value>();") formals)
+          else
+            "";
+
         formalsBindings =
-          if formals != null then
+          if formals != null && needsFwdDecl then
+            join "\n    " (
+              builtins.map (
+                f:
+                if f.hasDefault then
+                  ''
+                    *${sanitize f.name} = Value::thunk([=]() -> Value {
+                      try { return ${paramName}[${builtins.toJSON f.name}]; }
+                      catch(...) { return ${f.default}; }
+                    });
+                  ''
+                else
+                  "*${sanitize f.name} = Value::thunk([=]() -> Value { return ${paramName}[${builtins.toJSON f.name}]; });"
+              ) formals
+            )
+          else if formals != null then
             join "\n    " (
               builtins.map (
                 f:
@@ -236,6 +314,7 @@ let
         bindings = builtins.concatStringsSep "\n    " (
           builtins.filter (s: s != "") [
             identifierBinding
+            formalsFwdDecls
             formalsBindings
             ellipsisCheck
             localDefsBlock
@@ -257,9 +336,10 @@ let
         lambdaCtor = if formalsMetadata != null then "Value::lambdaWithFormals" else "Value::lambda";
 
         formalsArg = if formalsMetadata != null then ", ${formalsMetadata}" else "";
+
       in
       ''
-        *${sanitize name} = ${lambdaCtor}([=](Value ${paramName}) -> Value {
+        *${sanitize name} = ${lambdaCtor}([=](const Value& ${paramName}) -> Value {
           ${bindings}
           return ${bodyStr};
         }${formalsArg});
@@ -274,22 +354,61 @@ let
         defs,
         defNames ? [ ],
         expr,
+        usedPrimops ? { },
+        stringDefs ? { },
+        stringDefNames ? [ ],
       }:
-      if defs == [ ] then
+      let
+        # Only emit definitions for primops that are actually used
+        usedKnown = builtins.filter (name: builtins.hasAttr name cppPrimopDefs) (
+          builtins.attrNames usedPrimops
+        );
+        usedUnknown = builtins.filter (name: !(builtins.hasAttr name cppPrimopDefs)) (
+          builtins.attrNames usedPrimops
+        );
+        primopDecls = builtins.map (
+          name: "auto __wb_primop_${sanitize name} = ${cppPrimopDefs.${name}};"
+        ) usedKnown;
+        # Factory for unknown primops — defined once, called with name string.
+        unknownFactory =
+          if usedUnknown != [ ] then
+            [
+              ''
+                auto __wb_unknown_primop = [](const std::string& name) -> Value {
+                  return Value::lambda([name](const Value&) -> Value {
+                    throw std::runtime_error("wechselbalg: primop '" + name + "' is not implemented in C++");
+                  });
+                };''
+            ]
+          else
+            [ ];
+        primopBlock = join "\n" (unknownFactory ++ primopDecls);
+        # Deduplicated string constants
+        stringDecls = builtins.map (
+          name: "auto ${name} = std::make_shared<Value>(${stringDefs.${name}});"
+        ) stringDefNames;
+        hasContent = defs != [ ] || primopBlock != "" || stringDecls != [ ];
+      in
+      if !hasContent then
         expr
       else
         let
           fwdDecls = builtins.map (n: "auto ${sanitize n} = std::make_shared<Value>();") defNames;
-          defBlock = join "\n" (fwdDecls ++ defs);
+          defBlock = join "\n" (stringDecls ++ fwdDecls ++ defs);
         in
         ''
-          ([=]() -> Value {
+          ([]() -> Value {
+            ${primopBlock}
             ${defBlock}
             return ${expr};
           }())'';
 
     # ── Primops ─────────────────────────────────────────────────
-    primops = import ../primops/cpp.nix;
+    # Primop definitions are the full C++ lambda code.
+    # Primop references (used during rendering) are just variable names.
+    # renderProgram emits all primop definitions once in the preamble.
+    primopDefs = cppPrimopDefs;
+    primops = builtins.mapAttrs (name: _: "__wb_primop_${sanitize name}") cppPrimopDefs;
   };
 
 in

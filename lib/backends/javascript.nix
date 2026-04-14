@@ -233,12 +233,19 @@ let
         defs,
         defNames ? [ ],
         expr,
+        stringDefs ? { },
+        stringDefNames ? [ ],
+        ...
       }:
-      if defs == [ ] then
+      let
+        stringDecls = builtins.map (name: "let ${name} = ${stringDefs.${name}};") stringDefNames;
+        allDefs = stringDecls ++ defs;
+      in
+      if allDefs == [ ] then
         expr
       else
         let
-          defBlock = join "\n" defs;
+          defBlock = join "\n" allDefs;
         in
         ''
           (() => {

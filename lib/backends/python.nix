@@ -220,8 +220,15 @@ let
         defs,
         defNames ? [ ],
         expr,
+        stringDefs ? { },
+        stringDefNames ? [ ],
+        ...
       }:
-      if defs == [ ] then expr else "(lambda: (${join ", " (defs ++ [ expr ])})[-1])()";
+      let
+        stringDecls = builtins.map (name: "(${name} := ${stringDefs.${name}})") stringDefNames;
+        allDefs = stringDecls ++ defs;
+      in
+      if allDefs == [ ] then expr else "(lambda: (${join ", " (allDefs ++ [ expr ])})[-1])()";
 
     # ── Primops ─────────────────────────────────────────────────
     primops = import ../primops/python.nix;

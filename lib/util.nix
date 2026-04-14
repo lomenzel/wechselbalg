@@ -10,6 +10,31 @@ let
       name = "${prefix}${toString i}";
     in
     if builtins.hasAttr name known then findNew prefix (i + 1) known else name;
+
+  JSONOptimizable =
+    depth: value:
+    let
+      type = builtins.typeOf value;
+      canEvaluate = builtins.tryEval value;
+    in
+    if !canEvaluate.success then
+      #builtins.trace "optimize-json: value cannot be evaluated at build time"
+      false
+    else if depth > 1000 then
+      #builtins.trace "optimize-json: depth too high, maybe cyclic data structure"
+      false
+    else if
+      type == "null" || type == "string" || type == "int" || type == "bool" || type == "float"
+    then
+      true
+    else if type == "list" then
+      builtins.all (JSONOptimizable (depth + 1)) value
+    else if type == "set" then
+      builtins.all (JSONOptimizable (depth + 1)) (builtins.attrValues value)
+    else if type == "path" || type == "lambda" then
+      false
+    else
+      throw "unknown type ${type} in JSONOptimizable";
 in
 {
   # Generate a fresh function name not yet in `known`.
@@ -17,4 +42,6 @@ in
 
   # Generate a fresh variable name not yet in `known`.
   freshVarName = findNew "__wb_var_" 0;
+  JSONOptimizable = JSONOptimizable 0;
+
 }

@@ -39,12 +39,29 @@ let
       }
 
     else if _expr == "concatString/addition" then
-      # Don't try to eagerly evaluate — the + operator can mix types
-      # (string + int) which causes uncatchable errors.
-      {
-        success = false;
-        value = null;
-      }
+      # Safe to evaluate when all operands are the same type (no mix → no uncatchable errors).
+      let
+        partsEval = builtins.map eval value;
+        allSuccess = builtins.all (e: e.success) partsEval;
+        values = builtins.map (e: e.value) partsEval;
+        allStrings = allSuccess && builtins.all builtins.isString values;
+        allNumbers = allSuccess && builtins.all (v: builtins.isInt v || builtins.isFloat v) values;
+      in
+      if allStrings then
+        {
+          success = true;
+          value = builtins.concatStringsSep "" values;
+        }
+      else if allNumbers then
+        {
+          success = true;
+          value = builtins.foldl' (a: b: a + b) 0 values;
+        }
+      else
+        {
+          success = false;
+          value = null;
+        }
 
     else if _expr == "list" then
       let
@@ -173,10 +190,10 @@ let
       }
 
     else if _expr == "let" then
-      {
-        success = false;
-        value = null;
-      }
+      # Try evaluating just the body — if all variable references resolve
+      # (via closureEnvValues from Nix's evaluator), the let collapses.
+      # Individual bindings are still structurally walked if this fails.
+      eval value.body
 
     else if _expr == "with" then
       {
@@ -237,35 +254,59 @@ let
     else if _expr == "and" then
       let
         fstEval = eval value.e1;
-        sndEval = eval value.e2;
-        success = fstEval.success && sndEval.success;
       in
-      {
-        inherit success;
-        value = if success then fstEval.value && sndEval.value else null;
-      }
+      if fstEval.success && !fstEval.value then
+        {
+          success = true;
+          value = false;
+        }
+      else
+        let
+          sndEval = eval value.e2;
+          success = fstEval.success && sndEval.success;
+        in
+        {
+          inherit success;
+          value = if success then fstEval.value && sndEval.value else null;
+        }
 
     else if _expr == "or" then
       let
         fstEval = eval value.e1;
-        sndEval = eval value.e2;
-        success = fstEval.success && sndEval.success;
       in
-      {
-        inherit success;
-        value = if success then fstEval.value || sndEval.value else null;
-      }
+      if fstEval.success && fstEval.value then
+        {
+          success = true;
+          value = true;
+        }
+      else
+        let
+          sndEval = eval value.e2;
+          success = fstEval.success && sndEval.success;
+        in
+        {
+          inherit success;
+          value = if success then fstEval.value || sndEval.value else null;
+        }
 
     else if _expr == "implies" then
       let
         fstEval = eval value.e1;
-        sndEval = eval value.e2;
-        success = fstEval.success && sndEval.success;
       in
-      {
-        inherit success;
-        value = if success then fstEval.value -> sndEval.value else null;
-      }
+      if fstEval.success && !fstEval.value then
+        {
+          success = true;
+          value = true;
+        }
+      else
+        let
+          sndEval = eval value.e2;
+          success = fstEval.success && sndEval.success;
+        in
+        {
+          inherit success;
+          value = if success then fstEval.value -> sndEval.value else null;
+        }
 
     else if _expr == "notEquals" then
       let

@@ -20,6 +20,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -35,8 +36,8 @@ struct ThunkState {
 
 struct Value {
   using List = std::vector<Value>;
-  using Set = std::map<std::string, Value>;
-  using Func = std::function<Value(Value)>;
+  using Set = std::unordered_map<std::string, Value>;
+  using Func = std::function<Value(const Value &)>;
   using ThunkPtr = std::shared_ptr<ThunkState>;
 
   enum class Type { Null, Bool, Int, Float, String, List, Set, Lambda, Thunk };
@@ -45,7 +46,7 @@ struct Value {
   mutable std::variant<std::monostate, bool, long long, double, std::string,
                        List, Set, Func, ThunkPtr>
       value;
-  mutable std::map<std::string, bool> _formals;
+  mutable std::unordered_map<std::string, bool> _formals;
 
   Value() : type(Type::Null), value(std::monostate{}) {}
 
@@ -89,7 +90,8 @@ struct Value {
   }
   static Value fromSet(Set v) { return Value(Type::Set, std::move(v)); }
   static Value lambda(Func v) { return Value(Type::Lambda, std::move(v)); }
-  static Value lambdaWithFormals(Func v, std::map<std::string, bool> formals) {
+  static Value
+  lambdaWithFormals(Func v, std::unordered_map<std::string, bool> formals) {
     Value val(Type::Lambda, std::move(v));
     val._formals = std::move(formals);
     return val;
@@ -242,17 +244,17 @@ struct Value {
 
   // ── Call ───────────────────────────────────────────────────────
 
-  Value operator()(Value arg) const {
+  Value operator()(const Value &arg) const {
     force();
     if (type == Type::Set) {
       auto &s = std::get<Set>(value);
       auto it = s.find("__functor");
       if (it != s.end())
-        return it->second(*this)(std::move(arg));
+        return it->second(*this)(arg);
     }
     if (type != Type::Lambda)
       throw std::runtime_error("wechselbalg: tried to call a " + typeOf());
-    return std::get<Func>(value)(std::move(arg));
+    return std::get<Func>(value)(arg);
   }
 
   // ── Attribute access ──────────────────────────────────────────
@@ -449,17 +451,29 @@ struct Value {
 
   Value attrNames() const {
     const auto &s = asSet();
-    List r;
+    std::vector<std::string> keys;
+    keys.reserve(s.size());
     for (const auto &kv : s)
-      r.push_back(fromString(kv.first));
+      keys.push_back(kv.first);
+    std::sort(keys.begin(), keys.end());
+    List r;
+    r.reserve(keys.size());
+    for (const auto &k : keys)
+      r.push_back(fromString(k));
     return fromList(std::move(r));
   }
 
   Value attrValues() const {
     const auto &s = asSet();
-    List r;
+    std::vector<std::string> keys;
+    keys.reserve(s.size());
     for (const auto &kv : s)
-      r.push_back(kv.second);
+      keys.push_back(kv.first);
+    std::sort(keys.begin(), keys.end());
+    List r;
+    r.reserve(keys.size());
+    for (const auto &k : keys)
+      r.push_back(s.at(k));
     return fromList(std::move(r));
   }
 
@@ -634,13 +648,19 @@ struct Value {
       return r + "]";
     }
     case Type::Set: {
+      const auto &s = asSet();
+      std::vector<std::string> keys;
+      keys.reserve(s.size());
+      for (const auto &kv : s)
+        keys.push_back(kv.first);
+      std::sort(keys.begin(), keys.end());
       std::string r = "{";
       bool first = true;
-      for (const auto &kv : asSet()) {
+      for (const auto &k : keys) {
         if (!first)
           r += ",";
         first = false;
-        r += "\"" + kv.first + "\":" + kv.second.toJSON();
+        r += "\"" + k + "\":" + s.at(k).toJSON();
       }
       return r + "}";
     }
@@ -651,13 +671,222 @@ struct Value {
   }
 
   static Value fromJSON(const std::string &s) {
-    // Minimal JSON parser — for full support, use nlohmann/json
-    throw std::runtime_error(
-        "wechselbalg: fromJSON not implemented in minimal runtime. "
-        "Link nlohmann/json and implement if needed.");
+    size_t pos = 0;
+    Value result = parseJSON(s, pos);
+    return result;
   }
 
 private:
+  static void skipWhitespace(const std::string &s, size_t &pos) {
+    while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\t' ||
+                              s[pos] == '\n' || s[pos] == '\r'))
+      pos++;
+  }
+
+  static Value parseJSON(const std::string &s, size_t &pos) {
+    skipWhitespace(s, pos);
+    if (pos >= s.size())
+      throw std::runtime_error(
+          "wechselbalg: fromJSON: unexpected end of input");
+    char c = s[pos];
+    if (c == '"')
+      return parseJSONString(s, pos);
+    if (c == '{')
+      return parseJSONObject(s, pos);
+    if (c == '[')
+      return parseJSONArray(s, pos);
+    if (c == 't') { // true
+      if (s.compare(pos, 4, "true") == 0) {
+        pos += 4;
+        return fromBool(true);
+      }
+      throw std::runtime_error("wechselbalg: fromJSON: unexpected token");
+    }
+    if (c == 'f') { // false
+      if (s.compare(pos, 5, "false") == 0) {
+        pos += 5;
+        return fromBool(false);
+      }
+      throw std::runtime_error("wechselbalg: fromJSON: unexpected token");
+    }
+    if (c == 'n') { // null
+      if (s.compare(pos, 4, "null") == 0) {
+        pos += 4;
+        return null_();
+      }
+      throw std::runtime_error("wechselbalg: fromJSON: unexpected token");
+    }
+    // Number
+    return parseJSONNumber(s, pos);
+  }
+
+  static std::string parseJSONStringRaw(const std::string &s, size_t &pos) {
+    if (s[pos] != '"')
+      throw std::runtime_error("wechselbalg: fromJSON: expected '\"'");
+    pos++;
+    std::string result;
+    while (pos < s.size() && s[pos] != '"') {
+      if (s[pos] == '\\') {
+        pos++;
+        if (pos >= s.size())
+          throw std::runtime_error(
+              "wechselbalg: fromJSON: unexpected end in string escape");
+        switch (s[pos]) {
+        case '"':
+          result += '"';
+          break;
+        case '\\':
+          result += '\\';
+          break;
+        case '/':
+          result += '/';
+          break;
+        case 'b':
+          result += '\b';
+          break;
+        case 'f':
+          result += '\f';
+          break;
+        case 'n':
+          result += '\n';
+          break;
+        case 'r':
+          result += '\r';
+          break;
+        case 't':
+          result += '\t';
+          break;
+        case 'u': {
+          if (pos + 4 >= s.size())
+            throw std::runtime_error(
+                "wechselbalg: fromJSON: incomplete unicode escape");
+          unsigned cp = 0;
+          for (int i = 1; i <= 4; i++) {
+            char h = s[pos + i];
+            cp <<= 4;
+            if (h >= '0' && h <= '9')
+              cp |= (h - '0');
+            else if (h >= 'a' && h <= 'f')
+              cp |= (h - 'a' + 10);
+            else if (h >= 'A' && h <= 'F')
+              cp |= (h - 'A' + 10);
+            else
+              throw std::runtime_error(
+                  "wechselbalg: fromJSON: invalid unicode escape");
+          }
+          pos += 4;
+          // UTF-8 encode
+          if (cp < 0x80) {
+            result += (char)cp;
+          } else if (cp < 0x800) {
+            result += (char)(0xC0 | (cp >> 6));
+            result += (char)(0x80 | (cp & 0x3F));
+          } else {
+            result += (char)(0xE0 | (cp >> 12));
+            result += (char)(0x80 | ((cp >> 6) & 0x3F));
+            result += (char)(0x80 | (cp & 0x3F));
+          }
+          break;
+        }
+        default:
+          throw std::runtime_error("wechselbalg: fromJSON: unknown escape");
+        }
+      } else {
+        result += s[pos];
+      }
+      pos++;
+    }
+    if (pos >= s.size())
+      throw std::runtime_error("wechselbalg: fromJSON: unterminated string");
+    pos++; // skip closing "
+    return result;
+  }
+
+  static Value parseJSONString(const std::string &s, size_t &pos) {
+    return fromString(parseJSONStringRaw(s, pos));
+  }
+
+  static Value parseJSONNumber(const std::string &s, size_t &pos) {
+    size_t start = pos;
+    bool isFloat = false;
+    if (pos < s.size() && s[pos] == '-')
+      pos++;
+    while (pos < s.size() && s[pos] >= '0' && s[pos] <= '9')
+      pos++;
+    if (pos < s.size() && s[pos] == '.') {
+      isFloat = true;
+      pos++;
+      while (pos < s.size() && s[pos] >= '0' && s[pos] <= '9')
+        pos++;
+    }
+    if (pos < s.size() && (s[pos] == 'e' || s[pos] == 'E')) {
+      isFloat = true;
+      pos++;
+      if (pos < s.size() && (s[pos] == '+' || s[pos] == '-'))
+        pos++;
+      while (pos < s.size() && s[pos] >= '0' && s[pos] <= '9')
+        pos++;
+    }
+    if (pos == start)
+      throw std::runtime_error("wechselbalg: fromJSON: expected number");
+    std::string num = s.substr(start, pos - start);
+    if (isFloat)
+      return fromFloat(std::stod(num));
+    return fromInt(std::stoll(num));
+  }
+
+  static Value parseJSONArray(const std::string &s, size_t &pos) {
+    pos++; // skip [
+    List items;
+    skipWhitespace(s, pos);
+    if (pos < s.size() && s[pos] == ']') {
+      pos++;
+      return fromList(std::move(items));
+    }
+    while (true) {
+      items.push_back(parseJSON(s, pos));
+      skipWhitespace(s, pos);
+      if (pos < s.size() && s[pos] == ',') {
+        pos++;
+        continue;
+      }
+      if (pos < s.size() && s[pos] == ']') {
+        pos++;
+        return fromList(std::move(items));
+      }
+      throw std::runtime_error("wechselbalg: fromJSON: expected ',' or ']'");
+    }
+  }
+
+  static Value parseJSONObject(const std::string &s, size_t &pos) {
+    pos++; // skip {
+    Set entries;
+    skipWhitespace(s, pos);
+    if (pos < s.size() && s[pos] == '}') {
+      pos++;
+      return fromSet(std::move(entries));
+    }
+    while (true) {
+      skipWhitespace(s, pos);
+      std::string key = parseJSONStringRaw(s, pos);
+      skipWhitespace(s, pos);
+      if (pos >= s.size() || s[pos] != ':')
+        throw std::runtime_error("wechselbalg: fromJSON: expected ':'");
+      pos++;
+      entries[key] = parseJSON(s, pos);
+      skipWhitespace(s, pos);
+      if (pos < s.size() && s[pos] == ',') {
+        pos++;
+        continue;
+      }
+      if (pos < s.size() && s[pos] == '}') {
+        pos++;
+        return fromSet(std::move(entries));
+      }
+      throw std::runtime_error("wechselbalg: fromJSON: expected ',' or '}'");
+    }
+  }
+
   template <typename T> Value(Type t, T v) : type(t), value(std::move(v)) {}
 };
 

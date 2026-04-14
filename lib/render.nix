@@ -16,6 +16,185 @@
 let
   ir = import ./ir.nix;
 
+  # ── Collect all primop names referenced in IR trees ─────────
+  # Walks an IR node recursively; returns a flat list of primop name strings.
+  collectNode =
+    node:
+    if node._t == "primop" then
+      [ node.name ]
+
+    else if
+      node._t == "int"
+      || node._t == "float"
+      || node._t == "string"
+      || node._t == "bool"
+      || node._t == "null"
+      || node._t == "ref"
+      || node._t == "var"
+    then
+      [ ]
+
+    else if node._t == "list" then
+      builtins.concatMap collectNode node.elements
+
+    else if node._t == "attrs" then
+      builtins.concatMap (n: collectNode node.entries.${n}) (builtins.attrNames node.entries)
+
+    else if node._t == "apply" then
+      collectNode node.fn ++ collectNode node.arg
+
+    else if node._t == "if" then
+      collectNode node.cond ++ collectNode node.then_ ++ collectNode node.else_
+
+    else if node._t == "eq" then
+      collectNode node.a ++ collectNode node.b
+
+    else if node._t == "lessThan" then
+      collectNode node.a ++ collectNode node.b
+
+    else if node._t == "add" then
+      collectNode node.a ++ collectNode node.b
+
+    else if node._t == "update" then
+      collectNode node.base ++ collectNode node.ext
+
+    else if node._t == "concatLists" then
+      collectNode node.a ++ collectNode node.b
+
+    else if node._t == "select" then
+      collectNode node.expr
+      ++ builtins.concatMap collectNode node.path
+      ++ (if node.default != null then collectNode node.default else [ ])
+
+    else if node._t == "let" then
+      builtins.concatMap (n: collectNode node.bindings.${n}) (builtins.attrNames node.bindings)
+      ++ collectNode node.body
+      ++ collectDefs node.localDefs
+
+    else
+      [ ];
+
+  # Walk a funcDef (params defaults + body + localDefs).
+  collectFuncDef =
+    def:
+    let
+      fromFormals =
+        if def.params.formals or null != null then
+          builtins.concatMap (
+            f: if f.hasDefault or false then collectNode f.default else [ ]
+          ) def.params.formals
+        else
+          [ ];
+    in
+    fromFormals ++ collectNode def.body ++ collectDefs (def.localDefs or { });
+
+  # Walk a set of funcDefs.
+  collectDefs = defs: builtins.concatMap (n: collectFuncDef defs.${n}) (builtins.attrNames defs);
+
+  # Collect all unique primop names from a walk result.
+  collectPrimops =
+    walkResult:
+    let
+      allNames = collectNode walkResult.ir ++ collectDefs walkResult.defs;
+    in
+    builtins.listToAttrs (
+      builtins.map (n: {
+        name = n;
+        value = true;
+      }) allNames
+    );
+
+  # ── String deduplication ────────────────────────────────────────
+  # Walks the IR + defs and collects all string literal values.
+  collectStringsNode =
+    node:
+    if node._t == "string" then
+      [ node.value ]
+
+    else if
+      node._t == "int"
+      || node._t == "float"
+      || node._t == "bool"
+      || node._t == "null"
+      || node._t == "ref"
+      || node._t == "var"
+      || node._t == "primop"
+    then
+      [ ]
+
+    else if node._t == "list" then
+      builtins.concatMap collectStringsNode node.elements
+
+    else if node._t == "attrs" then
+      builtins.concatMap (n: collectStringsNode node.entries.${n}) (builtins.attrNames node.entries)
+
+    else if node._t == "apply" then
+      collectStringsNode node.fn ++ collectStringsNode node.arg
+
+    else if node._t == "if" then
+      collectStringsNode node.cond ++ collectStringsNode node.then_ ++ collectStringsNode node.else_
+
+    else if node._t == "eq" then
+      collectStringsNode node.a ++ collectStringsNode node.b
+
+    else if node._t == "lessThan" then
+      collectStringsNode node.a ++ collectStringsNode node.b
+
+    else if node._t == "add" then
+      collectStringsNode node.a ++ collectStringsNode node.b
+
+    else if node._t == "update" then
+      collectStringsNode node.base ++ collectStringsNode node.ext
+
+    else if node._t == "concatLists" then
+      collectStringsNode node.a ++ collectStringsNode node.b
+
+    else if node._t == "select" then
+      collectStringsNode node.expr
+      ++ builtins.concatMap collectStringsNode node.path
+      ++ (if node.default != null then collectStringsNode node.default else [ ])
+
+    else if node._t == "let" then
+      builtins.concatMap (n: collectStringsNode node.bindings.${n}) (builtins.attrNames node.bindings)
+      ++ collectStringsNode node.body
+      ++ collectStringsDefs node.localDefs
+
+    else
+      [ ];
+
+  collectStringsFuncDef =
+    def:
+    let
+      fromFormals =
+        if def.params.formals or null != null then
+          builtins.concatMap (
+            f: if f.hasDefault or false then collectStringsNode f.default else [ ]
+          ) def.params.formals
+        else
+          [ ];
+    in
+    fromFormals ++ collectStringsNode def.body ++ collectStringsDefs (def.localDefs or { });
+
+  collectStringsDefs =
+    defs: builtins.concatMap (n: collectStringsFuncDef defs.${n}) (builtins.attrNames defs);
+
+  # Build a dedup map: { stringValue = varName; } for strings appearing
+  # more than twice and longer than 8 characters.
+  buildStringDedup =
+    walkResult:
+    let
+      allStrings = collectStringsNode walkResult.ir ++ collectStringsDefs walkResult.defs;
+      grouped = builtins.groupBy (s: s) allStrings;
+      candidates = builtins.filter (s: builtins.length grouped.${s} > 1) (builtins.attrNames grouped);
+      sorted = builtins.sort (a: b: a < b) candidates;
+    in
+    builtins.listToAttrs (
+      builtins.genList (i: {
+        name = builtins.elemAt sorted i;
+        value = "__wb_str_${toString i}";
+      }) (builtins.length sorted)
+    );
+
   # Render a single IR node using the backend.
   renderNode =
     backend: node:
@@ -89,9 +268,8 @@ let
       if builtins.hasAttr node.name backend.primops then
         backend.primops.${node.name}
       else if builtins.hasAttr "renderUnknownPrimop" backend then
-        builtins.trace "wechselbalg warning: primop '${node.name}' is not implemented in ${backend.name} — will throw at runtime" (
-          backend.renderUnknownPrimop node.name
-        )
+        # builtins.trace "wechselbalg warning: primop '${node.name}' is not implemented in ${backend.name} — will throw at runtime"
+        (backend.renderUnknownPrimop node.name)
       else
         throw "wechselbalg: backend '${backend.name}' does not implement primop '${node.name}'"
 
@@ -131,14 +309,43 @@ let
   render =
     backend: walkResult:
     let
+      usedPrimops = collectPrimops walkResult;
+
+      # String deduplication: large strings used more than once become
+      # shared top-level variables.
+      stringDedup = buildStringDedup walkResult;
+      dedupBackend =
+        if stringDedup == { } then
+          backend
+        else
+          backend
+          // {
+            renderString =
+              value:
+              if builtins.hasAttr value stringDedup then
+                backend.renderVar stringDedup.${value}
+              else
+                backend.renderString value;
+          };
+
       defNames = builtins.attrNames walkResult.defs;
-      renderedDefs = builtins.map (name: renderDef backend name walkResult.defs.${name}) defNames;
-      renderedExpr = renderNode backend walkResult.ir;
+      renderedDefs = builtins.map (name: renderDef dedupBackend name walkResult.defs.${name}) defNames;
+      renderedExpr = renderNode dedupBackend walkResult.ir;
+
+      # Build rendered string defs for the program preamble
+      stringDefNames = builtins.sort (a: b: a < b) (builtins.attrValues stringDedup);
+      stringDefs = builtins.listToAttrs (
+        builtins.map (strValue: {
+          name = stringDedup.${strValue};
+          value = backend.renderString strValue;
+        }) (builtins.attrNames stringDedup)
+      );
     in
     backend.renderProgram {
       defs = renderedDefs;
       defNames = defNames;
       expr = renderedExpr;
+      inherit usedPrimops stringDefs stringDefNames;
     };
 
 in

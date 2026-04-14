@@ -447,10 +447,14 @@ class Value:
         return Value.from_list([s[k] for k in sorted(s.keys())])
 
     def remove_attrs(self, names: "Value") -> "Value":
-        s = dict(self.as_set().items())
-        for n in names.as_list():
-            s.pop(n.as_string(), None)
-        return Value.from_set(s)
+        orig = self.as_set()
+        remove = {n.as_string() for n in names.as_list()}
+        factories = {}
+        for k in orig.keys():
+            if k not in remove:
+                key = k
+                factories[key] = lambda key=key: orig[key]
+        return Value.lazy_set(factories)
 
     def list_to_attrs(self) -> "Value":
         s = {}

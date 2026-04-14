@@ -87,7 +87,15 @@ let
       type = builtins.typeOf value;
       _ = purity.assertPure value;
     in
-    if type == "int" then
+
+    if (type == "set" || type == "list") && util.JSONOptimizable value then
+      # skip walking of pure JSON-optimizable sets/lists — just emit IR converting it to String literal and parsing at runtime
+      {
+        ir = ir.primopApp "fromJSON" [ (ir.string (builtins.toJSON value)) ];
+        defs = { };
+        inherit known;
+      }
+    else if type == "int" then
       {
         ir = ir.int value;
         defs = { };
@@ -182,20 +190,25 @@ let
           builtins.concatStringsSep "," names + (if distinguishers != "" then "#${distinguishers}" else "");
       in
       if builtins.hasAttr fingerprint seenSets then
-        # Circular attrset reference detected — emit a lazy attrset with
-        # runtime throws for each entry.  Throws are deferred because
-        # attrs entries are lazy — they only fire when accessed.
+        # Circular attrset reference detected — emit a let-bound throw so
+        # the error message string is defined once, shared across all entries.
         {
-          ir = ir.attrs (
-            builtins.listToAttrs (
-              builtins.map (name: {
-                inherit name;
-                value = ir.primopApp "throw" [
-                  (ir.string "wechselbalg: circular attrset reference at '${name}' (keys: ${fingerprint})")
+          ir =
+            ir.let_
+              {
+                __wb_circ_err = ir.primopApp "throw" [
+                  (ir.string "wechselbalg: circular attrset (keys: ${fingerprint})")
                 ];
-              }) names
-            )
-          );
+              }
+              (ir.attrs (
+                builtins.listToAttrs (
+                  builtins.map (name: {
+                    inherit name;
+                    value = ir.var "__wb_circ_err";
+                  }) names
+                )
+              ))
+              { };
           defs = { };
           inherit known;
         }
