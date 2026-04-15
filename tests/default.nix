@@ -1,32 +1,8 @@
-# Wechselbalg test runner.
-#
-# Auto-discovers all *.test.nix files in this directory (recursively).
-# Each test file returns a list of test cases:
-#
-#   [{
-#     func = params: <some computation>;
-#     params = { ... };
-#     description = "what this tests";
-#     expected.toBe = <expected result>;
-#   }]
-#
-# The runner translates each test's `func` through every backend,
-# generates a harness that calls it with `params` and asserts the
-# result equals `expected.toBe`, then compiles+runs to verify.
-#
-# To add a new backend, add an entry to `testBackends` below.
-# Each backend needs: translate, nixToLiteral, mkTestBlock, harness, run.
-#
-# Usage:
-#   nix flake check          (runs all tests)
-#   nix build .#checks.x86_64-linux.tests
-
 { pkgs, wechselbalg }:
 
 let
   lib = pkgs.lib;
 
-  # ── Test discovery ──────────────────────────────────────────
   testFiles =
     lib.filesystem.listFilesRecursive ./.
     |> lib.filter (path: lib.hasSuffix ".test.nix" (builtins.toString path));
@@ -47,131 +23,11 @@ let
     builtins.map (t: t // { _file = fileName; }) testList
   ) testFiles;
 
-  # ── Nix value → target literal converters ───────────────────
-
-  nixToJS =
-    v:
-    let
-      type = builtins.typeOf v;
-    in
-    if type == "int" then
-      "Value.fromInt(${toString v}n)"
-    else if type == "float" then
-      "Value.fromFloat(${builtins.toJSON v})"
-    else if type == "string" then
-      "Value.fromString(${builtins.toJSON v})"
-    else if type == "bool" then
-      "Value.fromBool(${if v then "true" else "false"})"
-    else if type == "null" then
-      "Value.null_()"
-    else if type == "list" then
-      "Value.fromList([${lib.concatMapStringsSep ", " nixToJS v}])"
-    else if type == "set" then
-      let
-        pairs = lib.mapAttrsToList (k: val: "${builtins.toJSON k}: ${nixToJS val}") v;
-      in
-      "Value.fromSet({${lib.concatStringsSep ", " pairs}})"
-    else
-      throw "wechselbalg test: cannot convert Nix type '${type}' to JS literal";
-
-  nixToCpp =
-    v:
-    let
-      type = builtins.typeOf v;
-    in
-    if type == "int" then
-      "Value::fromInt(${toString v})"
-    else if type == "float" then
-      "Value::fromFloat(${builtins.toJSON v})"
-    else if type == "string" then
-      "Value::fromString(${builtins.toJSON v})"
-    else if type == "bool" then
-      "Value::fromBool(${if v then "true" else "false"})"
-    else if type == "null" then
-      "Value::null_()"
-    else if type == "list" then
-      "Value::fromList({${lib.concatMapStringsSep ", " nixToCpp v}})"
-    else if type == "set" then
-      let
-        pairs = lib.mapAttrsToList (k: val: "{${builtins.toJSON k}, ${nixToCpp val}}") v;
-      in
-      "Value::fromSet({${lib.concatStringsSep ", " pairs}})"
-    else
-      throw "wechselbalg test: cannot convert Nix type '${type}' to C++ literal";
-
-  nixToPython =
-    v:
-    let
-      type = builtins.typeOf v;
-    in
-    if type == "int" then
-      "Value.from_int(${toString v})"
-    else if type == "float" then
-      "Value.from_float(${builtins.toJSON v})"
-    else if type == "string" then
-      "Value.from_string(${builtins.toJSON v})"
-    else if type == "bool" then
-      "Value.from_bool(${if v then "True" else "False"})"
-    else if type == "null" then
-      "Value.null_()"
-    else if type == "list" then
-      "Value.from_list([${lib.concatMapStringsSep ", " nixToPython v}])"
-    else if type == "set" then
-      let
-        pairs = lib.mapAttrsToList (k: val: "${builtins.toJSON k}: ${nixToPython val}") v;
-      in
-      "Value.from_set({${lib.concatStringsSep ", " pairs}})"
-    else
-      throw "wechselbalg test: cannot convert Nix type '${type}' to Python literal";
-
-  nixToNix =
-    v:
-    let
-      type = builtins.typeOf v;
-    in
-    if type == "int" then
-      toString v
-    else if type == "float" then
-      builtins.toJSON v
-    else if type == "string" then
-      builtins.toJSON v
-    else if type == "bool" then
-      (if v then "true" else "false")
-    else if type == "null" then
-      "null"
-    else if type == "list" then
-      "[ ${lib.concatMapStringsSep " " nixToNix v} ]"
-    else if type == "set" then
-      let
-        pairs = lib.mapAttrsToList (k: val: "${builtins.toJSON k} = ${nixToNix val};") v;
-      in
-      "{ ${lib.concatStringsSep " " pairs} }"
-    else
-      throw "wechselbalg test: cannot convert Nix type '${type}' to Nix literal";
-
-  # TypeScript uses the same literal syntax as JavaScript.
-  nixToTS = nixToJS;
-
-  # ── Backend definitions ─────────────────────────────────────
-  # Each backend provides everything needed to build and run tests.
-  # To add a new backend, add an entry here with:
-  #   translate:    Nix value → target code string
-  #   nixToLiteral: Nix value → target literal string
-  #   mkTestBlock:  test → code block string for a single test
-  #   harness:      [test-blocks] → full source file string
-  #   buildInputs:  packages needed to compile/run
-  #   mkDrv:        tests → { buildPhase; buildInputs; }
-  #
-  # Tests that fail to translate (e.g. missing primops) are reported
-  # as failures.
-
   testBackends = {
 
-    # ── JavaScript backend ──────────────────────────────────────
     javascript = rec {
       name = "javascript";
       translate = wechselbalg.toJS;
-      nixToLiteral = nixToJS;
 
       mkTestBlock =
         test:
@@ -190,8 +46,8 @@ let
         else
           let
             code = tryCode.value;
-            params = nixToLiteral test.params;
-            expected = nixToLiteral test.expected.toBe;
+            params = translate test.params;
+            expected = translate test.expected.toBe;
           in
           {
             block = ''
@@ -259,7 +115,6 @@ let
     typescript = rec {
       name = "typescript";
       translate = wechselbalg.toTS;
-      nixToLiteral = nixToTS;
 
       mkTestBlock =
         test:
@@ -278,8 +133,8 @@ let
         else
           let
             code = tryCode.value;
-            params = nixToLiteral test.params;
-            expected = nixToLiteral test.expected.toBe;
+            params = translate test.params;
+            expected = translate test.expected.toBe;
           in
           {
             block = ''
@@ -318,6 +173,7 @@ let
                 ${r.block}
                 _passed++;
               } catch(e: any) {
+
                 console.error(e.message || e);
                 _failed++;
               }
@@ -354,7 +210,6 @@ let
     cpp = rec {
       name = "cpp";
       translate = wechselbalg.toCpp;
-      nixToLiteral = nixToCpp;
 
       mkTestBlock =
         test:
@@ -375,8 +230,8 @@ let
         else
           let
             code = tryCode.value;
-            params = nixToLiteral test.params;
-            expected = nixToLiteral test.expected.toBe;
+            params = translate test.params;
+            expected = translate test.expected.toBe;
           in
           {
             block = ''
@@ -450,7 +305,6 @@ let
     python = rec {
       name = "python";
       translate = wechselbalg.toPython;
-      nixToLiteral = nixToPython;
 
       mkTestBlock =
         test:
@@ -468,8 +322,8 @@ let
         else
           let
             code = tryCode.value;
-            params = nixToLiteral test.params;
-            expected = nixToLiteral test.expected.toBe;
+            params = translate test.params;
+            expected = translate test.expected.toBe;
           in
           {
             block = ''
@@ -536,7 +390,6 @@ let
     nix = rec {
       name = "nix";
       translate = wechselbalg.toNix;
-      nixToLiteral = nixToNix;
 
       deepEq =
         a: b:
