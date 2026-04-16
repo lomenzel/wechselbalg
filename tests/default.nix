@@ -573,3 +573,58 @@ let
 
 in
 lib.mapAttrs mkBackendDrv testBackends
+// {
+  # ── C++ library mode integration test ───────────────────────
+  # Builds a generated wechselbalg value as a standalone static
+  # library, then links a small consumer against it and runs it.
+  cpp-library =
+    let
+      # The value being exported: a curried adder
+      a = (x: x + 1);
+      increment = x: a x;
+      libSpec = wechselbalg.mkCppLibrary {
+        value = increment;
+        namespace = "myns";
+        name = "increment";
+      };
+      generatedLib = libSpec.mkDerivation pkgs;
+
+      libSpec2 = wechselbalg.mkCppLibrary {
+        value = 41;
+        namespace = "myns1";
+        name = "base";
+      };
+      generatedLib2 = libSpec2.mkDerivation pkgs;
+    in
+    pkgs.stdenv.mkDerivation {
+      name = "wechselbalg-cpp-library-test";
+      dontUnpack = true;
+      nativeBuildInputs = [ pkgs.gcc ];
+      buildInputs = [
+        generatedLib
+        generatedLib2
+      ];
+      buildPhase = ''
+        cat > main.cpp <<'EOF'
+        #include <myns/increment.hpp>
+        #include <myns1/base.hpp>
+        #include <cstdio>
+        int main() {
+          auto r1 = myns::increment(myns1::base).asInt();
+          auto r2 = myns::increment(${wechselbalg.toCpp (-1)}).asInt();
+          if (r1 != 42) { std::fprintf(stderr, "FAIL: increment(41) = %lld\n", r1); return 1; }
+          if (r2 != 0)  { std::fprintf(stderr, "FAIL: increment(-1) = %lld\n", r2); return 1; }
+          std::printf("PASS: cpp library mode (increment 41 = %lld, -1 = %lld)\n", r1, r2);
+          return 0;
+        }
+        EOF
+        g++ -std=c++23 -O2  main.cpp \
+          -lmyns_increment -lmyns1_base \
+          -o test_bin
+        ./test_bin
+      '';
+      installPhase = ''
+        echo "cpp library test passed." > $out
+      '';
+    };
+}

@@ -39,6 +39,180 @@ let
     in
     renderer.render backend walkResult;
 
+  # ── C++ library build ──────────────────────────────────────────
+  # Translate `value` to a set of C++ source files suitable for building
+  # a static library.  See backends/cpp.nix `renderLibrary` for the
+  # shape of `files`.
+  #
+  # Returns:
+  #   {
+  #     namespace;            # as requested
+  #     name;                 # as requested
+  #     files;                # attrset { relpath = contents; ... }
+  #     mkDerivation = pkgs: <stdenv.mkDerivation>;
+  #   }
+  #
+  # The derivation produces:
+  #   $out/include/wechselbalg/value.hpp
+  #   $out/include/<namespace>/<name>.hpp
+  #   $out/lib/lib<namespace>_<name>.a
+  mkCppLibrary =
+    {
+      value,
+      namespace,
+      name,
+    }:
+    let
+      walkResult = walk value;
+      files = renderer.renderLibrary backends.cpp walkResult {
+        inherit namespace name;
+      };
+
+      cppFiles = builtins.filter (
+        p:
+        let
+          ext = builtins.substring ((builtins.stringLength p) - 4) 4 p;
+        in
+        ext == ".cpp"
+      ) (builtins.attrNames files);
+
+      libBase = "${namespace}_${name}";
+
+    in
+    {
+      inherit namespace name files;
+
+      mkDerivation =
+        pkgs:
+        let
+          # Materialise each generated file as its own store path.
+          # We then `install -D` them into the build dir so we have real
+          # (writable) files with the correct hierarchy.
+          pathToDrv = pkgs.lib.mapAttrs (
+            path: content:
+            pkgs.writeText ("wb-src-" + builtins.replaceStrings [ "/" "." ] [ "_" "_" ] path) content
+          ) files;
+
+          installLines = builtins.concatStringsSep "\n" (
+            pkgs.lib.mapAttrsToList (path: drv: ''
+              mkdir -p "build/$(dirname ${path})"
+              cp "${drv}" "build/${path}"
+              chmod u+w "build/${path}"
+            '') pathToDrv
+          );
+
+          objFiles = builtins.map (
+            p:
+            let
+              noSlash = builtins.replaceStrings [ "/" ] [ "_" ] p;
+              len = builtins.stringLength noSlash;
+              # strip trailing ".cpp" (4 chars) and append ".o"
+            in
+            builtins.substring 0 (len - 4) noSlash + ".o"
+          ) cppFiles;
+
+          # Generate a build.ninja file for parallel compilation.
+          ninjaFile = builtins.concatStringsSep "\n" (
+            [
+              "cxxflags = -std=c++23 -O2 -fPIC -Iinclude -Isrc"
+              ""
+              "rule cxx"
+              "  command = g++ $cxxflags -c $in -o $out"
+              "  description = Compiling $in"
+              ""
+              "rule ar"
+              "  command = ar rcs $out $in"
+              "  description = Archiving $out"
+              ""
+            ]
+            ++ (pkgs.lib.zipListsWith (src: obj: "build ${obj}: cxx ${src}") cppFiles objFiles)
+            ++ [
+              ""
+              "build lib${libBase}.a: ar ${builtins.concatStringsSep " " objFiles}"
+              ""
+              "default lib${libBase}.a"
+            ]
+          );
+          ninjaFileDrv = pkgs.writeText "build.ninja" (ninjaFile + "\n");
+        in
+        pkgs.stdenv.mkDerivation {
+          pname = "wb-cpp-${libBase}";
+          version = "0.0.0";
+          dontUnpack = true;
+          dontStrip = true;
+          dontPatchELF = true;
+          nativeBuildInputs = [
+            pkgs.gcc
+            pkgs.ninja
+          ];
+          buildPhase = ''
+            runHook preBuild
+            ${pkgs.writeShellScript "build.sh" ''
+              (
+              set -eu
+              ${installLines}
+              cp "${ninjaFileDrv}" build/build.ninja
+              cd build
+              export 
+              NINJA_STATUS='[%f/%t %p %w %W] ' ninja -v
+              )''}
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/include" "$out/lib"
+            cp -r build/include/. "$out/include/"
+            cp "build/lib${libBase}.a" "$out/lib/"
+            runHook postInstall
+          '';
+          passthru = {
+            inherit files;
+            source = pkgs.runCommand "source" { } ''
+              mkdir -p "$out"
+              ${
+                # Symlink the generated files into the output for easy access.
+                # This is not strictly necessary since the headers are installed
+                # into $out/include, but it can be convenient for users to have
+                # them directly available.
+                builtins.concatStringsSep "\n" (
+                  pkgs.lib.mapAttrsToList (path: drv: ''
+                    ln -s "${drv}" "$out/$(basename ${path})"
+                  '') pathToDrv
+                )
+              }
+            '';
+          };
+        };
+    };
+
+  # Functor version of toCpp:
+  #   lib.toCpp value               → attrset coercible to the code string
+  #                                   (existing behaviour via __toString)
+  #   lib.toCpp value { library = { namespace; name; }; }
+  #                                 → C++ library spec (see mkCppLibrary)
+  toCppFunctor = {
+    __functor =
+      _self: value:
+      let
+        code = renderer.render backends.cpp (walk value);
+      in
+      {
+        __toString = _self: code;
+        __functor =
+          _self:
+          {
+            library ? null,
+          }:
+          if library == null then
+            code
+          else
+            mkCppLibrary {
+              inherit value;
+              inherit (library) namespace name;
+            };
+      };
+  };
+
   # Convenience wrappers
   toJS =
     value:
@@ -46,12 +220,7 @@ let
       lang = "javascript";
       inherit value;
     };
-  toCpp =
-    value:
-    translate {
-      lang = "cpp";
-      inherit value;
-    };
+  toCpp = toCppFunctor;
   toPython =
     value:
     translate {
@@ -80,6 +249,7 @@ in
     toCpp
     toPython
     toNix
+    mkCppLibrary
     ;
 
   # The C++ Value type header — users include this in their project.

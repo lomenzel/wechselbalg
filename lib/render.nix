@@ -305,14 +305,14 @@ let
 
   # ── Main entry point ────────────────────────────────────────────
   # Takes a backend and a walk result { ir; defs; } and produces
-  # the final code string.
-  render =
+  # ── Shared collection ──────────────────────────────────────────
+  # Both `render` and `renderLibrary` share the same rendering of
+  # bindings, defs, and expression; only the final assembly step differs.
+  prepare =
     backend: walkResult:
     let
       usedPrimops = collectPrimops walkResult;
 
-      # String deduplication: large strings used more than once become
-      # shared top-level variables.
       stringDedup = buildStringDedup walkResult;
       dedupBackend =
         if stringDedup == { } then
@@ -332,7 +332,6 @@ let
       renderedDefs = builtins.map (name: renderDef dedupBackend name walkResult.defs.${name}) defNames;
       renderedExpr = renderNode dedupBackend walkResult.ir;
 
-      # Build rendered string defs for the program preamble
       stringDefNames = builtins.sort (a: b: a < b) (builtins.attrValues stringDedup);
       stringDefs = builtins.listToAttrs (
         builtins.map (strValue: {
@@ -341,14 +340,27 @@ let
         }) (builtins.attrNames stringDedup)
       );
     in
-    backend.renderProgram {
+    {
       defs = renderedDefs;
-      defNames = defNames;
+      inherit defNames;
       expr = renderedExpr;
       inherit usedPrimops stringDefs stringDefNames;
     };
 
+  # Main entry point — returns the rendered program as a single string.
+  render = backend: walkResult: backend.renderProgram (prepare backend walkResult);
+
+  # Library entry point — delegates to backend.renderLibrary (currently
+  # only implemented by the C++ backend).  Returns an attrset of file
+  # contents (see backends/cpp.nix for the shape).
+  renderLibrary =
+    backend: walkResult: libraryOpts:
+    if !(builtins.hasAttr "renderLibrary" backend) then
+      throw "wechselbalg: backend '${backend.name}' does not support library mode"
+    else
+      backend.renderLibrary (prepare backend walkResult // { library = libraryOpts; });
+
 in
 {
-  inherit render renderNode;
+  inherit render renderLibrary renderNode;
 }

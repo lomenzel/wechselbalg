@@ -6,83 +6,109 @@
     treefmt-nix.url = "github:numtide/treefmt-nix";
   };
 
-  outputs =
-    {
-      self,
-      nixpkgs,
-      nixFork,
-      treefmt-nix,
-      ...
-    }:
-    let
-      supportedSystems = nixpkgs.lib.systems.flakeExposed;
-      eachSystem =
-        f:
-        nixpkgs.lib.genAttrs supportedSystems (
-          system:
+  outputs = {
+    self,
+    nixpkgs,
+    nixFork,
+    treefmt-nix,
+    ...
+  }: let
+    supportedSystems = nixpkgs.lib.systems.flakeExposed;
+    eachSystem = f:
+      nixpkgs.lib.genAttrs supportedSystems (
+        system:
           f {
             inherit system;
             pkgs = import nixpkgs {
               inherit system;
-              overlays = [ self.overlays.default ];
+              overlays = [self.overlays.default];
             };
           }
-        );
-      treefmtEval = eachSystem ({ pkgs, ... }: treefmt-nix.lib.evalModule pkgs ./treefmt.nix);
-    in
-    {
-      lib = import ./lib;
+      );
+    treefmtEval = eachSystem ({pkgs, ...}: treefmt-nix.lib.evalModule pkgs ./treefmt.nix);
+  in {
+    lib = import ./lib;
 
-      overlays.default = final: prev: {
-        lib = prev.lib // {
-          inherit (self.lib)
+    overlays.default = final: prev: {
+      lib =
+        prev.lib
+        // {
+          inherit
+            (self.lib)
             toJS
             toTS
             toCpp
             toPython
             toNix
+            mkCppLibrary
             cppRuntime
             jsRuntime
             tsRuntime
             pythonRuntime
             ;
         };
-      };
+    };
 
-      checks = eachSystem (
-        {
-          pkgs,
-          system,
-          ...
-        }:
-        let
-          testsByBackend = import ./tests {
-            inherit pkgs;
-            wechselbalg = self.lib;
-          };
-        in
+    packages = eachSystem (
+      {
+        pkgs,
+        system,
+        ...
+      }: {
+        example =
+          (
+            pkgs.lib.toCpp
+            (
+              let
+                a = x: x + 1;
+              in
+                pkgs.lib.evalModules
+            )
+            {
+              library = {
+                name = "example";
+                namespace = "wechselbalgexample";
+              };
+            }
+          ).mkDerivation
+          pkgs;
+      }
+    );
+
+    checks = eachSystem (
+      {
+        pkgs,
+        system,
+        ...
+      }: let
+        testsByBackend = import ./tests {
+          inherit pkgs;
+          wechselbalg = self.lib;
+        };
+      in
         testsByBackend
         // {
           formatting = treefmtEval.${system}.config.build.check self;
         }
-      );
+    );
 
-      devShells = eachSystem (
-        {
-          pkgs,
-          system,
-          ...
-        }:
-        {
-          default = pkgs.mkShell {
-            buildInputs = [
-              (pkgs.writeShellScriptBin "nix" ''
-                ulimit -s unlimited && ${nixFork.packages.${system}.nix}/bin/nix --option max-call-depth 10000000 "$@"
-              '')
-            ];
-          };
-        }
-      );
-      formatter = eachSystem ({ system, ... }: treefmtEval.${system}.config.build.wrapper);
-    };
+    devShells = eachSystem (
+      {
+        pkgs,
+        system,
+        ...
+      }: {
+        default = pkgs.mkShell {
+          buildInputs = [
+            (pkgs.writeShellScriptBin "nix" ''
+              ulimit -s unlimited && ${nixFork.packages.${system}.nix}/bin/nix --option max-call-depth 10000000 "$@"
+            '')
+            pkgs.llvmPackages_22.clang-tools
+            pkgs.gdb
+          ];
+        };
+      }
+    );
+    formatter = eachSystem ({system, ...}: treefmtEval.${system}.config.build.wrapper);
+  };
 }

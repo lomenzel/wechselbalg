@@ -55,6 +55,49 @@ pkgs.writeText "fun.js" ''
 
 Python and C++ work similarly using `lib.pythonRuntime` and `lib.cppRuntime`.
 
+### C++ library mode
+
+For large values, the single-TU output of `lib.toCpp value` may be too
+large for the C++ compiler to handle efficiently. `lib.toCpp` is also a
+functor: calling it with an options attrset returns a library spec whose
+`mkDerivation` produces a static library and matching public header.
+Each hoisted function ends up in its own translation unit so compilation
+is parallelisable and individual TUs stay small.
+
+```nix
+let
+  cppApp = lib.toCpp someLargeValue {
+    library = {
+      namespace = "myapp";          # C++ namespace for internal symbols
+      name = "value";               # exported global name
+    };
+  };
+  lib-drv = cppApp.mkDerivation pkgs;
+in
+pkgs.stdenv.mkDerivation {
+  name = "my-consumer";
+  buildInputs = [ lib-drv ];
+  # …
+  buildPhase = ''
+    g++ -std=c++23 -I${lib-drv}/include main.cpp \
+        -L${lib-drv}/lib -lmyapp_value -o main
+  '';
+}
+```
+
+The consumer includes the exported value like this:
+
+```cpp
+#include <myapp/value.hpp>
+int main() {
+  auto r = myapp::value(Value::fromInt(5));
+  // ...
+}
+```
+
+Without the `library` option, `lib.toCpp value` still returns the
+original single-expression string (via `__toString`).
+
 Generating Nix is simpler and does not require a runtime:
 
 ```nix
