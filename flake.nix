@@ -2,7 +2,6 @@
   description = "Wechselbalg — translate Nix values to JavaScript, TypeScript, C++, Nix, and more";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs";
-    treefmt.url = "github:numtide/treefmt-nix";
     nixFork.url = "github:lomenzel/nix";
     treefmt-nix.url = "github:numtide/treefmt-nix";
   };
@@ -11,7 +10,6 @@
     {
       self,
       nixpkgs,
-      treefmt,
       nixFork,
       treefmt-nix,
       ...
@@ -35,24 +33,21 @@
     {
       lib = import ./lib;
 
-      overlays.default =
-        final: prev:
-
-        {
-          lib = prev.lib // {
-            inherit (self.lib)
-              toJS
-              toTS
-              toCpp
-              toPython
-              toNix
-              cppRuntime
-              jsRuntime
-              tsRuntime
-              pythonRuntime
-              ;
-          };
+      overlays.default = final: prev: {
+        lib = prev.lib // {
+          inherit (self.lib)
+            toJS
+            toTS
+            toCpp
+            toPython
+            toNix
+            cppRuntime
+            jsRuntime
+            tsRuntime
+            pythonRuntime
+            ;
         };
+      };
 
       checks = eachSystem (
         {
@@ -89,7 +84,5 @@
         }
       );
       formatter = eachSystem ({ system, ... }: treefmtEval.${system}.config.build.wrapper);
-
     };
-
 }
