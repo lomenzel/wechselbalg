@@ -66,21 +66,25 @@ is parallelisable and individual TUs stay small.
 
 ```nix
 let
-  cppApp = lib.toCpp someLargeValue {
-    library = {
-      namespace = "myapp";          # C++ namespace for internal symbols
-      name = "value";               # exported global name
-    };
+  cppApp = lib.mkCppLibrary {
+      namespace = "myapp"; # can be linked with -lmyapp
+                           # produces a myapp.hpp
+                           # all attrs of value are accessible through that namespace
+      value = {
+        name = "VeryGoodApp";
+        version = "1.0.0";
+        otherCode = largeValue;
+      };
   };
   lib-drv = cppApp.mkDerivation pkgs;
 in
 pkgs.stdenv.mkDerivation {
   name = "my-consumer";
-  buildInputs = [ lib-drv ];
+  nativeBuildInputs = [ lib-drv ];
   # …
   buildPhase = ''
-    g++ -std=c++23 -I${lib-drv}/include main.cpp \
-        -L${lib-drv}/lib -lmyapp_value -o main
+    g++ -std=c++23 main.cpp \
+      -lmyapp -o main
   '';
 }
 ```
@@ -88,15 +92,13 @@ pkgs.stdenv.mkDerivation {
 The consumer includes the exported value like this:
 
 ```cpp
-#include <myapp/value.hpp>
+#include <myapp.hpp>
 int main() {
-  auto r = myapp::value(Value::fromInt(5));
+  auto r = myapp::name.asString();
+  auto s = myapp::otherCode(myapp::version);
   // ...
 }
 ```
-
-Without the `library` option, `lib.toCpp value` still returns the
-original single-expression string (via `__toString`).
 
 Generating Nix is simpler and does not require a runtime:
 
