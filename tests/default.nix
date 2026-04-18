@@ -1,5 +1,7 @@
-{ pkgs, wechselbalg }:
-
+{
+  pkgs,
+  wechselbalg,
+}:
 let
   lib = pkgs.lib;
 
@@ -24,7 +26,6 @@ let
   ) testFiles;
 
   testBackends = {
-
     javascript = rec {
       name = "javascript";
       translate = wechselbalg.toJS;
@@ -552,7 +553,6 @@ let
           inherit buildInputs;
         };
     };
-
   };
 
   # ── Build one derivation per backend ────────────────────────
@@ -570,7 +570,6 @@ let
         echo "All ${backend.name} tests passed." > $out
       '';
     };
-
 in
 lib.mapAttrs mkBackendDrv testBackends
 // {
@@ -580,19 +579,20 @@ lib.mapAttrs mkBackendDrv testBackends
   cpp-library =
     let
       # The value being exported: a curried adder
-      a = (x: x + 1);
+      a = x: x + 1;
       increment = x: a x;
       libSpec = wechselbalg.mkCppLibrary {
-        value = increment;
-        namespace = "myns";
-        name = "increment";
+        value = { inherit increment; };
+        namespace = "testFN";
       };
       generatedLib = libSpec.mkDerivation pkgs;
 
       libSpec2 = wechselbalg.mkCppLibrary {
-        value = 41;
-        namespace = "myns1";
-        name = "base";
+        value = {
+          a = 41;
+          b = -1;
+        };
+        namespace = "base";
       };
       generatedLib2 = libSpec2.mkDerivation pkgs;
     in
@@ -606,20 +606,20 @@ lib.mapAttrs mkBackendDrv testBackends
       ];
       buildPhase = ''
         cat > main.cpp <<'EOF'
-        #include <myns/increment.hpp>
-        #include <myns1/base.hpp>
+        #include <testFN.hpp>
+        #include <base.hpp>
         #include <cstdio>
         int main() {
-          auto r1 = myns::increment(myns1::base).asInt();
-          auto r2 = myns::increment(${wechselbalg.toCpp (-1)}).asInt();
-          if (r1 != 42) { std::fprintf(stderr, "FAIL: increment(41) = %lld\n", r1); return 1; }
+          auto r1 = testFN::increment(base::a).asInt();
+          auto r2 = testFN::increment(base::b).asInt();
+          if (r1 != ${wechselbalg.toCpp 42}.asInt()) { std::fprintf(stderr, "FAIL: increment(41) = %lld\n", r1); return 1; }
           if (r2 != 0)  { std::fprintf(stderr, "FAIL: increment(-1) = %lld\n", r2); return 1; }
           std::printf("PASS: cpp library mode (increment 41 = %lld, -1 = %lld)\n", r1, r2);
           return 0;
         }
         EOF
         g++ -std=c++23 -O2  main.cpp \
-          -lmyns_increment -lmyns1_base \
+          -ltestFN -lbase \
           -o test_bin
         ./test_bin
       '';

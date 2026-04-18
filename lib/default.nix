@@ -8,7 +8,6 @@
 #
 # This file is the single entry-point. It wires together the walker,
 # renderer, and backends.
-
 let
   walk = import ./walk.nix;
   renderer = import ./render.nix;
@@ -60,12 +59,11 @@ let
     {
       value,
       namespace,
-      name,
     }:
     let
       walkResult = walk value;
-      files = renderer.renderLibrary backends.cpp walkResult {
-        inherit namespace name;
+      files = renderer.renderLibrary value backends.cpp walkResult {
+        inherit namespace value;
       };
 
       cppFiles = builtins.filter (
@@ -76,11 +74,10 @@ let
         ext == ".cpp"
       ) (builtins.attrNames files);
 
-      libBase = "${namespace}_${name}";
-
+      libBase = "${namespace}";
     in
     {
-      inherit namespace name files;
+      inherit namespace files;
 
       mkDerivation =
         pkgs:
@@ -208,7 +205,7 @@ let
           else
             mkCppLibrary {
               inherit value;
-              inherit (library) namespace name;
+              inherit (library) namespace;
             };
       };
   };
@@ -239,7 +236,6 @@ let
       lang = "nix";
       inherit value;
     };
-
 in
 {
   inherit

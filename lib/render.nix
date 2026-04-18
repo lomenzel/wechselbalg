@@ -12,7 +12,6 @@
 #   renderProgram: { defs : [string]; expr : string; } → string
 #   primops      : { name = string; ... }
 # }
-
 let
   ir = import ./ir.nix;
 
@@ -22,7 +21,6 @@ let
     node:
     if node._t == "primop" then
       [ node.name ]
-
     else if
       node._t == "int"
       || node._t == "float"
@@ -33,44 +31,32 @@ let
       || node._t == "var"
     then
       [ ]
-
     else if node._t == "list" then
       builtins.concatMap collectNode node.elements
-
     else if node._t == "attrs" then
       builtins.concatMap (n: collectNode node.entries.${n}) (builtins.attrNames node.entries)
-
     else if node._t == "apply" then
       collectNode node.fn ++ collectNode node.arg
-
     else if node._t == "if" then
       collectNode node.cond ++ collectNode node.then_ ++ collectNode node.else_
-
     else if node._t == "eq" then
       collectNode node.a ++ collectNode node.b
-
     else if node._t == "lessThan" then
       collectNode node.a ++ collectNode node.b
-
     else if node._t == "add" then
       collectNode node.a ++ collectNode node.b
-
     else if node._t == "update" then
       collectNode node.base ++ collectNode node.ext
-
     else if node._t == "concatLists" then
       collectNode node.a ++ collectNode node.b
-
     else if node._t == "select" then
       collectNode node.expr
       ++ builtins.concatMap collectNode node.path
       ++ (if node.default != null then collectNode node.default else [ ])
-
     else if node._t == "let" then
       builtins.concatMap (n: collectNode node.bindings.${n}) (builtins.attrNames node.bindings)
       ++ collectNode node.body
       ++ collectDefs node.localDefs
-
     else
       [ ];
 
@@ -110,7 +96,6 @@ let
     node:
     if node._t == "string" then
       [ node.value ]
-
     else if
       node._t == "int"
       || node._t == "float"
@@ -121,44 +106,32 @@ let
       || node._t == "primop"
     then
       [ ]
-
     else if node._t == "list" then
       builtins.concatMap collectStringsNode node.elements
-
     else if node._t == "attrs" then
       builtins.concatMap (n: collectStringsNode node.entries.${n}) (builtins.attrNames node.entries)
-
     else if node._t == "apply" then
       collectStringsNode node.fn ++ collectStringsNode node.arg
-
     else if node._t == "if" then
       collectStringsNode node.cond ++ collectStringsNode node.then_ ++ collectStringsNode node.else_
-
     else if node._t == "eq" then
       collectStringsNode node.a ++ collectStringsNode node.b
-
     else if node._t == "lessThan" then
       collectStringsNode node.a ++ collectStringsNode node.b
-
     else if node._t == "add" then
       collectStringsNode node.a ++ collectStringsNode node.b
-
     else if node._t == "update" then
       collectStringsNode node.base ++ collectStringsNode node.ext
-
     else if node._t == "concatLists" then
       collectStringsNode node.a ++ collectStringsNode node.b
-
     else if node._t == "select" then
       collectStringsNode node.expr
       ++ builtins.concatMap collectStringsNode node.path
       ++ (if node.default != null then collectStringsNode node.default else [ ])
-
     else if node._t == "let" then
       builtins.concatMap (n: collectStringsNode node.bindings.${n}) (builtins.attrNames node.bindings)
       ++ collectStringsNode node.body
       ++ collectStringsDefs node.localDefs
-
     else
       [ ];
 
@@ -200,25 +173,18 @@ let
     backend: node:
     if node._t == "int" then
       backend.renderInt node.value
-
     else if node._t == "float" then
       backend.renderFloat node.value
-
     else if node._t == "string" then
       backend.renderString node.value
-
     else if node._t == "bool" then
       backend.renderBool node.value
-
     else if node._t == "null" then
       backend.renderNull
-
     else if node._t == "list" then
       backend.renderList (builtins.map (renderNode backend) node.elements)
-
     else if node._t == "attrs" then
       backend.renderAttrs (builtins.mapAttrs (_: renderNode backend) node.entries)
-
     else if node._t == "let" then
       let
         renderedBindings = builtins.mapAttrs (_: renderNode backend) node.bindings;
@@ -229,41 +195,30 @@ let
         ) localDefNames;
       in
       backend.renderLet renderedBindings renderedBody renderedLocalDefs localDefNames
-
     else if node._t == "ref" then
       backend.renderRef node.name
-
     else if node._t == "apply" then
       backend.renderApply (renderNode backend node.fn) (renderNode backend node.arg)
-
     else if node._t == "var" then
       backend.renderVar node.name
-
     else if node._t == "if" then
       backend.renderIf (renderNode backend node.cond) (renderNode backend node.then_) (
         renderNode backend node.else_
       )
-
     else if node._t == "eq" then
       backend.renderEq (renderNode backend node.a) (renderNode backend node.b)
-
     else if node._t == "lessThan" then
       backend.renderLessThan (renderNode backend node.a) (renderNode backend node.b)
-
     else if node._t == "add" then
       backend.renderAdd (renderNode backend node.a) (renderNode backend node.b)
-
     else if node._t == "update" then
       backend.renderUpdate (renderNode backend node.base) (renderNode backend node.ext)
-
     else if node._t == "concatLists" then
       backend.renderConcatLists (renderNode backend node.a) (renderNode backend node.b)
-
     else if node._t == "select" then
       backend.renderSelect (renderNode backend node.expr) (builtins.map (renderNode backend) node.path) (
         if node.default != null then renderNode backend node.default else null
       )
-
     else if node._t == "primop" then
       if builtins.hasAttr node.name backend.primops then
         backend.primops.${node.name}
@@ -272,7 +227,6 @@ let
         (backend.renderUnknownPrimop node.name)
       else
         throw "wechselbalg: backend '${backend.name}' does not implement primop '${node.name}'"
-
     else
       throw "wechselbalg render: unknown IR node type '${node._t}'";
 
@@ -354,12 +308,17 @@ let
   # only implemented by the C++ backend).  Returns an attrset of file
   # contents (see backends/cpp.nix for the shape).
   renderLibrary =
-    backend: walkResult: libraryOpts:
+    value: backend: walkResult: libraryOpts:
     if !(builtins.hasAttr "renderLibrary" backend) then
       throw "wechselbalg: backend '${backend.name}' does not support library mode"
     else
-      backend.renderLibrary (prepare backend walkResult // { library = libraryOpts; });
-
+      backend.renderLibrary (
+        prepare backend walkResult
+        // {
+          library = libraryOpts;
+          inherit value;
+        }
+      );
 in
 {
   inherit render renderLibrary renderNode;
