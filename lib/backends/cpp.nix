@@ -25,7 +25,6 @@ let
     || hasPrefix "Value::fromBool(" str
     || hasPrefix "Value::fromString(" str
     || str == "Value::null_()"
-    || hasPrefix "(*" str
     || hasPrefix "__wb_primop_" str
     || hasPrefix "__wb_unknown_primop(" str;
 
