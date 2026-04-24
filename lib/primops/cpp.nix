@@ -213,7 +213,8 @@
 
   seq = ''
     Value::lambda([](const Value& a) {
-      return Value::lambda([](const Value& b) {
+      return Value::lambda([a](const Value& b) {
+        a.force();
         return b;
       });
     })
@@ -387,8 +388,8 @@
   tryEval = ''
     Value::lambda([](const Value& e) {
       try {
-        auto v = e;
-        return Value::fromSet({{"success", Value::fromBool(true)}, {"value", v}});
+        e.force();
+        return Value::fromSet({{"success", Value::fromBool(true)}, {"value", e}});
       } catch(...) {
         return Value::fromSet({{"success", Value::fromBool(false)}, {"value", Value::fromBool(false)}});
       }
@@ -415,10 +416,28 @@
     })
   '';
 
-  deepSeq = ''
+deepSeq = ''
     Value::lambda([](const Value& a) {
       return Value::lambda([a](const Value& b) {
-        a.toJSON();
+        // Recursive helper to deeply evaluate the value
+        std::function<void(const Value&)> deepForce;
+        deepForce = [&deepForce](const Value& val) {
+          val.force(); // Evaluate to WHNF
+          
+          // If it's a collection, recursively force its contents
+          if (val.isList()) {
+            for (const auto& item : val.asList()) {
+              deepForce(item);
+            }
+          } else if (val.isSet()) {
+            for (const auto& kv : val.asSet()) {
+              deepForce(kv.second);
+            }
+          }
+          // Int, Float, String, Bool, Null, and Lambdas require no further action
+        };
+
+        deepForce(a);
         return b;
       });
     })

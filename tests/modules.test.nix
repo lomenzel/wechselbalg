@@ -23,7 +23,7 @@ in
         result = evalModules {
           modules = [
             (
-              { lib, ... }:
+              { lib, config, ... }:
               {
                 options.unset = lib.mkOption {
                   type = lib.types.int;
@@ -35,7 +35,7 @@ in
                 };
                 options.doubled = lib.mkOption {
                   type = lib.types.int;
-                  default = 0;
+                  default = config.base * 2;
                 };
                 options.list = lib.mkOption {
                   type = lib.types.listOf lib.types.int;
@@ -50,7 +50,7 @@ in
               { config, ... }:
               {
                 base = params.p2;
-                doubled = config.base * 2;
+                #doubled = config.base * 2;
                 list = [ params.p3 ];
               }
             )

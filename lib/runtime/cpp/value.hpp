@@ -62,7 +62,12 @@ struct Value {
         throw std::runtime_error("wechselbalg: infinite recursion in thunk");
       if (!state.computed) {
         state.computing = true;
-        state.result = std::make_shared<Value>(state.fn());
+        try {
+          state.result = std::make_shared<Value>(state.fn());
+        } catch (...) {
+          state.computing = false;
+          throw;
+        }
         state.computed = true;
         state.computing = false;
       }
