@@ -384,6 +384,103 @@ let
         };
     };
 
+    # ── Kotlin backend ──────────────────────────────────────────
+    kotlin = rec {
+      name = "kotlin";
+      translate = wechselbalg.toKotlin;
+
+      mkTestBlock =
+        test:
+        let
+          tryCode = builtins.tryEval (translate test.func);
+        in
+        if !tryCode.success then
+          {
+            block = ''
+              // Test: ${test.description}
+              run {
+                System.err.println("FAIL: " + ${builtins.toJSON test.description} + "\n  Reason: translation failed")
+                _failed++
+              }
+            '';
+          }
+        else
+          let
+            code = tryCode.value;
+            params = translate test.params;
+            expected = translate test.expected.toBe;
+          in
+          {
+            block = ''
+              // Test: ${test.description}
+              run {
+                val func = ${code}
+                val params = ${params}
+                val expected = ${expected}
+                val result = func.call(params)
+                if (!Value._deepEq(result, expected)) {
+                  val r = result.toJSON_().asString()
+                  val e = expected.toJSON_().asString()
+                  System.err.println("FAIL: " + ${builtins.toJSON test.description} + "\n  Expected: " + e + "\n  Got:      " + r)
+                  _failed++
+                } else {
+                  println("PASS: " + ${builtins.toJSON test.description})
+                  _passed++
+                }
+              }
+            '';
+          };
+
+      harness =
+        results:
+        let
+          runtime = wechselbalg.kotlinRuntime;
+        in
+        ''
+          ${runtime}
+
+          fun main() {
+            var _passed = 0
+            var _failed = 0
+
+            ${lib.concatStringsSep "\n" (
+              builtins.map (r: ''
+                try {
+                  ${r.block}
+                } catch(e: Throwable) {
+                  System.err.println("ERROR: " + (e.message ?: e.toString()))
+                  _failed++
+                }
+              '') results
+            )}
+
+            println("\n" + _passed + " passed, " + _failed + " failed, " + (_passed + _failed) + " total")
+            if (_failed > 0) kotlin.system.exitProcess(1)
+          }
+        '';
+
+      buildInputs = [
+        pkgs.kotlin
+        pkgs.openjdk
+      ];
+
+      mkDrv =
+        tests:
+        let
+          results = builtins.map mkTestBlock tests;
+          testFile = pkgs.writeText "wechselbalg-tests.kt" (harness results);
+        in
+        {
+          buildPhase = ''
+            echo "=== Running ${toString (builtins.length results)} wechselbalg tests (${name}) ==="
+            cp ${testFile} Test.kt
+            kotlinc -include-runtime -d test.jar Test.kt
+            java -jar test.jar
+          '';
+          inherit buildInputs;
+        };
+    };
+
     # ── Nix backend ───────────────────────────────────────────────
     # Since we're compiling Nix → Nix, we can evaluate the generated
     # code at Nix eval time using builtins.import on a toFile.

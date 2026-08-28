@@ -1,7 +1,7 @@
 # Wechselbalg
 
 Wechselbalg translates Nix values (including functions and lambdas) into
-portable code for multiple targets: JavaScript, C++, Python, and Nix.
+portable code for multiple targets: JavaScript, TypeScript, C++, Python, Kotlin, and Nix.
 
 The project performs a single-pass traversal over Nix values to produce an
 intermediate representation (IR), which is then rendered by target-specific
@@ -26,14 +26,18 @@ translators are:
 - `toNix` — serialize Nix values to Nix source code (no runtime required)
 - `toCpp` — translate Nix values to C++ (requires C++ runtime)
 - `toJS` — translate Nix values to JavaScript (requires JS runtime)
+- `toTS` — translate Nix values to TypeScript (requires TS runtime)
 - `toPython` — translate Nix values to Python (requires Python runtime)
+- `toKotlin` — translate Nix values to Kotlin (requires Kotlin runtime)
 
 All non-Nix targets require a small runtime `Value` class (which handles
 laziness and helper functions). Runtime snippets are available as:
 
 - `lib.cppRuntime`
 - `lib.jsRuntime`
+- `lib.tsRuntime`
 - `lib.pythonRuntime`
+- `lib.kotlinRuntime`
 
 Example (embedding the JavaScript runtime from Nix):
 

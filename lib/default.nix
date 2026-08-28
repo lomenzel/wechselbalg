@@ -17,6 +17,7 @@ let
     typescript = import ./backends/typescript.nix;
     cpp = import ./backends/cpp.nix;
     python = import ./backends/python.nix;
+    kotlin = import ./backends/kotlin.nix;
     nix = import ./backends/nix.nix;
   };
 
@@ -230,6 +231,12 @@ let
       lang = "typescript";
       inherit value;
     };
+  toKotlin =
+    value:
+    translate {
+      lang = "kotlin";
+      inherit value;
+    };
   toNix =
     value:
     translate {
@@ -244,6 +251,7 @@ in
     toTS
     toCpp
     toPython
+    toKotlin
     toNix
     mkCppLibrary
     ;
@@ -263,6 +271,10 @@ in
   # The Python Value class — users import this before using toPython output.
   # Usage: write to file, exec(open("value.py").read()) before generated code.
   pythonRuntime = builtins.readFile ./runtime/python/value.py;
+
+  # The Kotlin Value class — users include this before using toKotlin output.
+  # Usage: write to file or compile together with generated code.
+  kotlinRuntime = builtins.readFile ./runtime/kotlin/Value.kt;
 
   # Escape hatches for advanced users
   inherit walk;

@@ -416,7 +416,7 @@
     })
   '';
 
-deepSeq = ''
+  deepSeq = ''
     Value::lambda([](const Value& a) {
       return Value::lambda([a](const Value& b) {
         // Recursive helper to deeply evaluate the value

@@ -40,12 +40,14 @@
             toTS
             toCpp
             toPython
+            toKotlin
             toNix
             mkCppLibrary
             cppRuntime
             jsRuntime
             tsRuntime
             pythonRuntime
+            kotlinRuntime
             ;
         };
       };
