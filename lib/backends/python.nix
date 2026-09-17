@@ -167,7 +167,7 @@ let
             builtins.map (
               f:
               if f.hasDefault then
-                "(${sanitize f.name} := Value.thunk(lambda: ${paramName}.get_or(${builtins.toJSON f.name}, ${f.default})))"
+                "(${sanitize f.name} := Value.thunk(lambda: ${paramName}.get(${builtins.toJSON f.name}) if ${paramName}.has_attr(${builtins.toJSON f.name}) else (${f.default})))"
               else
                 "(${sanitize f.name} := Value.thunk(lambda: ${paramName}.get(${builtins.toJSON f.name})))"
             ) formals

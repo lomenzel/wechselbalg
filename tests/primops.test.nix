@@ -237,6 +237,69 @@
     expected.toBe = "ell";
   }
   {
+    description = "builtins.substring with negative length returns remainder";
+    func = params: builtins.substring params.start params.len params.s;
+    params = {
+      start = 2;
+      len = -1;
+      s = "  huhu";
+    };
+    expected.toBe = "huhu";
+  }
+  {
+    description = "builtins.match requires full string match (anchored)";
+    func = params: builtins.match params.regex params.s;
+    params = {
+      regex = "[ \t]*";
+      s = "  huhu";
+    };
+    expected.toBe = null;
+  }
+  {
+    description = "builtins.match returns capture groups on full match";
+    func = params: builtins.match params.regex params.s;
+    params = {
+      regex = "([ \t]*).*";
+      s = "  huhu";
+    };
+    expected.toBe = [ "  " ];
+  }
+  {
+    description = "builtins.match without capture groups returns empty list on match";
+    func = params: builtins.match params.regex params.s;
+    params = {
+      regex = "[ \t]*";
+      s = "   ";
+    };
+    expected.toBe = [ ];
+  }
+  {
+    description = "builtins.split with non-capturing regex produces empty list delimiters";
+    func = params: builtins.split params.regex params.s;
+    params = {
+      regex = "\n";
+      s = "a\nb";
+    };
+    expected.toBe = [
+      "a"
+      [ ]
+      "b"
+    ];
+  }
+  {
+    description = "builtins.split with capturing regex produces captured groups";
+    func = params: builtins.split params.regex params.s;
+    params = {
+      regex = "([0-9]+)";
+      s = "a12b";
+    };
+    expected.toBe = [
+      "a"
+      [ "12" ]
+      "b"
+    ];
+  }
+  {
     description = "builtins.replaceStrings";
     func = params: builtins.replaceStrings params.from params.to params.s;
     params = {

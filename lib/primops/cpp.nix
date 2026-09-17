@@ -268,7 +268,12 @@
     Value::lambda([](const Value& start) {
       return Value::lambda([start](const Value& len) {
         return Value::lambda([start, len](const Value& str) {
-          return Value::fromString(str.asString().substr(start.asInt(), len.asInt()));
+          int64_t st = start.asInt();
+          int64_t l = len.asInt();
+          const std::string& s = str.asString();
+          if (st < 0 || st >= (int64_t)s.size()) return Value::fromString("");
+          if (l < 0) return Value::fromString(s.substr(st));
+          return Value::fromString(s.substr(st, l));
         });
       });
     })
@@ -286,6 +291,49 @@
         return Value::lambda([from, to](const Value& str) {
           return str.replaceStrings(from, to);
         });
+      });
+    })
+  '';
+
+  match = ''
+    Value::lambda([](const Value& regex) {
+      return Value::lambda([regex](const Value& str) {
+        std::regex re("^(?:" + regex.asString() + ")$");
+        std::smatch m;
+        std::string s = str.asString();
+        if (!std::regex_match(s, m, re)) return Value::null_();
+        Value::List list;
+        for (size_t i = 1; i < m.size(); ++i) {
+          if (!m[i].matched) list.push_back(Value::null_());
+          else list.push_back(Value::fromString(m[i].str()));
+        }
+        return Value::fromList(list);
+      });
+    })
+  '';
+
+  split = ''
+    Value::lambda([](const Value& regex) {
+      return Value::lambda([regex](const Value& str) {
+        std::regex re(regex.asString());
+        std::string s = str.asString();
+        Value::List parts;
+        auto begin = std::sregex_iterator(s.begin(), s.end(), re);
+        auto end = std::sregex_iterator();
+        size_t lastIndex = 0;
+        for (auto it = begin; it != end; ++it) {
+          const auto& match = *it;
+          parts.push_back(Value::fromString(s.substr(lastIndex, match.position() - lastIndex)));
+          Value::List captures;
+          for (size_t i = 1; i < match.size(); ++i) {
+            if (!match[i].matched) captures.push_back(Value::null_());
+            else captures.push_back(Value::fromString(match[i].str()));
+          }
+          parts.push_back(Value::fromList(captures));
+          lastIndex = match.position() + match.length();
+        }
+        parts.push_back(Value::fromString(s.substr(lastIndex)));
+        return Value::fromList(parts);
       });
     })
   '';

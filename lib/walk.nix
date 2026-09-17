@@ -85,7 +85,7 @@ let
     value: known: seenSets:
     let
       type = builtins.typeOf value;
-      _ = purity.assertPure value;
+      _ = if type == "path" then true else purity.assertPure value;
     in
 
     if (type == "set" || type == "list") && util.JSONOptimizable value then
@@ -343,6 +343,18 @@ let
             // splitBody.hoistable;
             known = bodyResult.known;
           }
+
+    else if type == "path" then
+      # Paths are not supported on non-Nix targets — emit a runtime error.
+      # This allows closures containing paths to still be translated as long
+      # as the path itself is not accessed at runtime.
+      {
+        ir = ir.primopApp "throw" [
+          (ir.string "wechselbalg: path '${toString value}' cannot be translated (paths are not supported in target runtime)")
+        ];
+        defs = { };
+        inherit known;
+      }
 
     else
       throw "wechselbalg: unsupported Nix type '${type}'";
@@ -630,6 +642,16 @@ let
         ir = ir.concatLists aR.ir bR.ir;
         defs = mergeDefs aR.defs bR.defs;
         known = bR.known;
+      }
+
+    else if ast._expr == "path" then
+      # Paths are not supported on non-Nix targets — emit a runtime error.
+      {
+        ir = ir.primopApp "throw" [
+          (ir.string "wechselbalg: path '${toString ast.value}' cannot be translated (paths are not supported in target runtime)")
+        ];
+        defs = { };
+        inherit known;
       }
 
     else if ast._expr == "list" then

@@ -66,7 +66,7 @@
   seq = "Value.lambda_(lambda a: Value.lambda_(lambda b: b))";
   deepSeq = "Value.lambda_(lambda a: Value.lambda_(lambda b: (a.to_json_(), b)[1]))";
 
-  substring = "Value.lambda_(lambda start: Value.lambda_(lambda length: Value.lambda_(lambda s: Value.from_string(s.as_string()[start.as_int():start.as_int() + length.as_int()]))))";
+  substring = "Value.lambda_(lambda start: Value.lambda_(lambda length: Value.lambda_(lambda s: Value.from_string(s.as_string()[start.as_int():] if length.as_int() < 0 else s.as_string()[start.as_int():start.as_int() + length.as_int()]))))";
   stringLength = "Value.lambda_(lambda s: Value.from_int(len(s.as_string())))";
   replaceStrings = "Value.lambda_(lambda from_: Value.lambda_(lambda to: Value.lambda_(lambda s: s.replace_strings(from_, to))))";
   split = "Value.lambda_(lambda regex: Value.lambda_(lambda s: __wb_split(regex, s)))";

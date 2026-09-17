@@ -285,8 +285,10 @@ let
                 if f.hasDefault then
                   ''
                     *${sanitize f.name} = Value::thunk([=]() -> Value {
-                      try { return ${paramName}[${builtins.toJSON f.name}]; }
-                      catch(...) { return ${f.default}; }
+                      if (${paramName}.hasAttr(${builtins.toJSON f.name})) {
+                        return ${paramName}[${builtins.toJSON f.name}];
+                      }
+                      return ${f.default};
                     });
                   ''
                 else
@@ -300,8 +302,10 @@ let
                 if f.hasDefault then
                   ''
                     auto ${sanitize f.name} = std::make_shared<Value>(Value::thunk([=]() -> Value {
-                      try { return ${paramName}[${builtins.toJSON f.name}]; }
-                      catch(...) { return ${f.default}; }
+                      if (${paramName}.hasAttr(${builtins.toJSON f.name})) {
+                        return ${paramName}[${builtins.toJSON f.name}];
+                      }
+                      return ${f.default};
                     }));
                   ''
                 else

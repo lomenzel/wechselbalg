@@ -16,6 +16,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -939,4 +940,11 @@ inline Value __wb_div(const Value &a, const Value &b) {
   }
   throw std::runtime_error("wechselbalg: cannot divide " + a.typeOf() +
                            " and " + b.typeOf());
+}
+
+inline Value __wb_unknown_primop(const std::string &name) {
+  return Value::lambda([name](const Value &) -> Value {
+    throw std::runtime_error("wechselbalg: primop '" + name +
+                             "' is not implemented in C++");
+  });
 }

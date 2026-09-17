@@ -79,9 +79,14 @@
   deepSeq = "Value.lambda(a => Value.lambda(b => { a.toJSON_(); return b; }))";
 
   substring = ''
-    Value.lambda(start => Value.lambda(len => Value.lambda(str =>
-      Value.fromString(str.asString().substring(Number(start.asInt()), Number(start.asInt()) + Number(len.asInt())))
-    )))
+    Value.lambda(start => Value.lambda(len => Value.lambda(str => {
+      const s = str.asString();
+      const st = Number(start.asInt());
+      const l = Number(len.asInt());
+      if (st < 0 || st >= s.length) return Value.fromString("");
+      if (l < 0) return Value.fromString(s.slice(st));
+      return Value.fromString(s.slice(st, st + l));
+    })))
   '';
   stringLength = "Value.lambda(str => Value.fromInt(BigInt(str.asString().length)))";
   replaceStrings = ''
@@ -96,8 +101,14 @@
       let match;
       while ((match = re.exec(s)) !== null) {
         parts.push(Value.fromString(s.slice(lastIndex, match.index)));
-        parts.push(Value.fromList([Value.fromString(match[0])]));
+        const captures = match.length > 1
+          ? match.slice(1).map(c => c === undefined ? Value.null_() : Value.fromString(c))
+          : [];
+        parts.push(Value.fromList(captures));
         lastIndex = re.lastIndex;
+        if (match.index === re.lastIndex) {
+          re.lastIndex++;
+        }
       }
       parts.push(Value.fromString(s.slice(lastIndex)));
       return Value.fromList(parts);
@@ -105,7 +116,7 @@
   '';
   match = ''
     Value.lambda(regex => Value.lambda(str => {
-      const m = str.asString().match(new RegExp(regex.asString()));
+      const m = str.asString().match(new RegExp("^(?:" + regex.asString() + ")$"));
       if (!m) return Value.null_();
       return Value.fromList(m.slice(1).map(s => s === undefined ? Value.null_() : Value.fromString(s)));
     }))

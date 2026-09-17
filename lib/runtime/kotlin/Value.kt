@@ -709,6 +709,7 @@ object Primops {
         val st = start.asInt().toInt()
         val l = len.asInt().toInt()
         if (st < 0 || st >= str.length) return Value.fromString("")
+        if (l < 0) return Value.fromString(str.substring(st))
         val end = minOf(st + l, str.length)
         return Value.fromString(str.substring(st, end))
     }
@@ -724,13 +725,9 @@ object Primops {
         while (matcher.find()) {
             parts.add(Value.fromString(string.substring(lastEnd, matcher.start())))
             val groupCount = matcher.groupCount()
-            val matched = if (groupCount > 0) {
-                (1..groupCount).map { i ->
-                    val g = matcher.group(i)
-                    if (g == null) Value.null_() else Value.fromString(g)
-                }
-            } else {
-                listOf(Value.fromString(matcher.group(0)))
+            val matched = (1..groupCount).map { i ->
+                val g = matcher.group(i)
+                if (g == null) Value.null_() else Value.fromString(g)
             }
             parts.add(Value.fromList(matched))
             lastEnd = matcher.end()

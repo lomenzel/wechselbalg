@@ -120,6 +120,25 @@
     expected.toBe = 10;
   }
   {
+    description = "lazy formal params: default expression with throw is not evaluated when argument is provided";
+    func =
+      params:
+      let
+        f =
+          {
+            a,
+            value ? builtins.throw "eval: missing 'value' in AST node",
+          }:
+          value;
+      in
+      f {
+        a = 1;
+        value = params;
+      };
+    params = 123;
+    expected.toBe = 123;
+  }
+  {
     description = "lazy formal params: default applied when missing";
     func =
       params:

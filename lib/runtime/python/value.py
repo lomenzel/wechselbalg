@@ -680,7 +680,14 @@ def __wb_split(regex_str, s):
     last_end = 0
     for m in pattern.finditer(string):
         parts.append(Value.from_string(string[last_end : m.start()]))
-        parts.append(Value.from_list([Value.from_string(m.group(0))]))
+        parts.append(
+            Value.from_list(
+                [
+                    Value.null_() if g is None else Value.from_string(g)
+                    for g in m.groups()
+                ]
+            )
+        )
         last_end = m.end()
     parts.append(Value.from_string(string[last_end:]))
     return Value.from_list(parts)

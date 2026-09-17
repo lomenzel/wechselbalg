@@ -171,7 +171,7 @@ let
               builtins.map (
                 f:
                 if f.hasDefault then
-                  "const ${sanitize f.name} = Value.thunk(() => ${paramName}.getOr(${builtins.toJSON f.name}, ${f.default}));"
+                  "const ${sanitize f.name} = Value.thunk(() => ${paramName}.hasAttr(${builtins.toJSON f.name}) ? ${paramName}.get(${builtins.toJSON f.name}) : (${f.default}));"
                 else
                   "const ${sanitize f.name} = Value.thunk(() => ${paramName}.get(${builtins.toJSON f.name}));"
               ) formals
