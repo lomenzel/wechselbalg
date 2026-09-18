@@ -20,7 +20,7 @@ let
     if !canEvaluate.success then
       #builtins.trace "optimize-json: value cannot be evaluated at build time"
       false
-    else if depth > 1000 then
+    else if depth > 100 then
       #builtins.trace "optimize-json: depth too high, maybe cyclic data structure"
       false
     else if
@@ -38,10 +38,21 @@ let
 in
 {
   # Generate a fresh function name not yet in `known`.
-  freshFuncName = findNew "__wb_func_" 0;
+  freshFuncName =
+    known:
+    let
+      # Fast jump: start searching from the number of keys already in known
+      startIdx = builtins.length (builtins.attrNames known);
+    in
+    findNew "__wb_func_" startIdx known;
 
   # Generate a fresh variable name not yet in `known`.
-  freshVarName = findNew "__wb_var_" 0;
+  freshVarName =
+    known:
+    let
+      startIdx = builtins.length (builtins.attrNames known);
+    in
+    findNew "__wb_var_" startIdx known;
   JSONOptimizable = JSONOptimizable 0;
 
 }
