@@ -364,12 +364,24 @@ let
         lambdaCtor = if formalsMetadata != null then "Value::lambdaWithFormals" else "Value::lambda";
 
         formalsArg = if formalsMetadata != null then ", ${formalsMetadata}" else "";
+
+        ctor = ''
+          ${lambdaCtor}([=](const Value& ${paramName}) -> Value {
+            ${bindings}
+            return ${bodyStr};
+          }${formalsArg})'';
+
+        astJson = params.ast or null;
+        tagged =
+          if astJson == null then
+            ctor
+          else
+            "Value::withMeta(${ctor}, ${builtins.toJSON astJson}, ${
+              if (params.env or null) == null then "Value::null_()" else params.env
+            })";
       in
       ''
-        *${sanitize name} = ${lambdaCtor}([=](const Value& ${paramName}) -> Value {
-          ${bindings}
-          return ${bodyStr};
-        }${formalsArg});
+        *${sanitize name} = ${tagged};
       '';
 
     # ── Program assembly ────────────────────────────────────────
@@ -394,7 +406,8 @@ let
           builtins.attrNames usedPrimops
         );
         primopDecls = builtins.map (
-          name: "auto __wb_primop_${sanitize name} = ${cppPrimopDefs.${name}};"
+          name:
+          "auto __wb_primop_${sanitize name} = Value::primop(${builtins.toJSON name}, ${cppPrimopDefs.${name}});"
         ) usedKnown;
         # Factory for unknown primops — defined once, called with name string.
         unknownFactory =
@@ -402,9 +415,9 @@ let
             [
               ''
                 auto __wb_unknown_primop = [](const std::string& name) -> Value {
-                  return Value::lambda([name](const Value&) -> Value {
+                  return Value::primop(name, Value::lambda([name](const Value&) -> Value {
                     throw std::runtime_error("wechselbalg: primop '" + name + "' is not implemented in C++");
-                  });
+                  }));
                 };''
             ]
           else
@@ -511,16 +524,16 @@ let
           '';
 
           primopDefsCpp = builtins.map (
-            n: "  Value __wb_primop_${sanitize n} = ${cppPrimopDefs.${n}};"
+            n: "  Value __wb_primop_${sanitize n} = Value::primop(${builtins.toJSON n}, ${cppPrimopDefs.${n}});"
           ) usedKnown;
           unknownDefCpp =
             if usedUnknown != [ ] then
               [
                 ''
                   Value __wb_unknown_primop(const std::string& name) {
-                    return Value::lambda([name](const Value&) -> Value {
+                    return Value::primop(name, Value::lambda([name](const Value&) -> Value {
                       throw std::runtime_error("wechselbalg: primop '" + name + "' is not implemented in C++");
-                    });
+                    }));
                   }''
               ]
             else

@@ -254,6 +254,10 @@
 
   addErrorContext = "Value.lambda(ctx => Value.lambda(val => val))";
 
+  # ── AST introspection (self-hosting) ──────────────────────────
+  reify = "Value.lambda(f => Value.reify(f))";
+  sameFunction = "Value.lambda(a => Value.lambda(b => Value.fromBool(Value.sameFunction(a, b))))";
+
   null = "Value.null_()";
   true = "Value.fromBool(true)";
   false = "Value.fromBool(false)";

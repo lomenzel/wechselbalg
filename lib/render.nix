@@ -37,6 +37,8 @@ let
       builtins.concatMap (n: collectNode node.entries.${n}) (builtins.attrNames node.entries)
     else if node._t == "apply" then
       collectNode node.fn ++ collectNode node.arg
+    else if node._t == "closure" then
+      builtins.concatMap (n: collectNode node.env.${n}) (builtins.attrNames node.env)
     else if node._t == "if" then
       collectNode node.cond ++ collectNode node.then_ ++ collectNode node.else_
     else if node._t == "eq" then
@@ -112,6 +114,8 @@ let
       builtins.concatMap (n: collectStringsNode node.entries.${n}) (builtins.attrNames node.entries)
     else if node._t == "apply" then
       collectStringsNode node.fn ++ collectStringsNode node.arg
+    else if node._t == "closure" then
+      builtins.concatMap (n: collectStringsNode node.env.${n}) (builtins.attrNames node.env)
     else if node._t == "if" then
       collectStringsNode node.cond ++ collectStringsNode node.then_ ++ collectStringsNode node.else_
     else if node._t == "eq" then
@@ -199,6 +203,15 @@ let
       backend.renderRef node.name
     else if node._t == "apply" then
       backend.renderApply (renderNode backend node.fn) (renderNode backend node.arg)
+    else if node._t == "closure" then
+      let
+        env = backend.renderAttrs (builtins.mapAttrs (_: renderNode backend) node.env);
+        tpl = backend.renderRef node.template;
+      in
+      if builtins.hasAttr "renderClosure" backend then
+        backend.renderClosure node.template tpl env
+      else
+        backend.renderApply tpl env
     else if node._t == "var" then
       backend.renderVar node.name
     else if node._t == "if" then
@@ -220,13 +233,19 @@ let
         if node.default != null then renderNode backend node.default else null
       )
     else if node._t == "primop" then
-      if builtins.hasAttr node.name backend.primops then
-        backend.primops.${node.name}
-      else if builtins.hasAttr "renderUnknownPrimop" backend then
-        # builtins.trace "wechselbalg warning: primop '${node.name}' is not implemented in ${backend.name} — will throw at runtime"
-        (backend.renderUnknownPrimop node.name)
-      else
-        throw "wechselbalg: backend '${backend.name}' does not implement primop '${node.name}'"
+      let
+        impl =
+          if builtins.hasAttr node.name backend.primops then
+            backend.primops.${node.name}
+          else if builtins.hasAttr "renderUnknownPrimop" backend then
+            # builtins.trace "wechselbalg warning: primop '${node.name}' is not implemented in ${backend.name} — will throw at runtime"
+            (backend.renderUnknownPrimop node.name)
+          else
+            throw "wechselbalg: backend '${backend.name}' does not implement primop '${node.name}'";
+      in
+      # Backends that support `builtins.sameFunction` tag primops with their
+      # name, since Nix compares primops by name rather than by identity.
+      if builtins.hasAttr "renderPrimop" backend then backend.renderPrimop node.name impl else impl
     else
       throw "wechselbalg render: unknown IR node type '${node._t}'";
 
@@ -251,6 +270,8 @@ let
             ) def.params.formals
           else
             null;
+        # Pre-rendered environment expression for runtime `builtins.reify`.
+        env = if (def.params.envIR or null) == null then null else renderNode backend def.params.envIR;
       };
       localDefNames = builtins.attrNames (def.localDefs or { });
       renderedLocalDefs = builtins.map (n: renderDef backend n def.localDefs.${n}) localDefNames;

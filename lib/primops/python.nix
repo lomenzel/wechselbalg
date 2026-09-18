@@ -105,5 +105,9 @@
 
   addErrorContext = "Value.lambda_(lambda ctx: Value.lambda_(lambda val: val))";
 
+  # ── AST introspection (self-hosting) ────────────────────────
+  reify = "Value.lambda_(lambda f: Value.reify(f))";
+  sameFunction = "Value.lambda_(lambda a: Value.lambda_(lambda b: Value.from_bool(Value.same_function(a, b))))";
+
   null = "Value.null_()";
 }

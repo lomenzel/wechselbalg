@@ -54,6 +54,16 @@ rec {
     inherit fn arg;
   };
 
+  # Instantiation of a code template with a captured environment.
+  # `template` names a hoisted definition of the shape `__wb_cenv: <lambda>`;
+  # `env` maps environment keys to IR nodes.
+  # Backends may override `renderClosure`; the default lowering in render.nix
+  # is a plain application, which is why the template is curried.
+  closure = template: env: {
+    _t = "closure";
+    inherit template env;
+  };
+
   # ── Variables ─────────────────────────────────────────────────────
   # A reference to a locally-bound variable (lambda param, let binding)
   var = name: {

@@ -78,6 +78,9 @@ let
       name:
       "Value.lambda_(lambda *__args: __wb_throw(Value.from_string(\"wechselbalg: primop '${name}' is not implemented in Python\")))";
 
+    # Nix compares primops by name, so carry the name into the runtime.
+    renderPrimop = name: impl: "Value.primop(${builtins.toJSON name}, ${impl})";
+
     # ── Literals ────────────────────────────────────────────────
     renderInt = value: "Value.from_int(${toString value})";
     renderFloat = value: "Value.from_float(${builtins.toJSON value})";
@@ -204,13 +207,23 @@ let
         lambdaCtor = if formalsMetadata != null then "Value.lambda_with_formals" else "Value.lambda_";
 
         formalsArg = if formalsMetadata != null then ", ${formalsMetadata}" else "";
+
+        ctor =
+          if allElements == [ ] then
+            "${lambdaCtor}(lambda ${paramName}: ${bodyStr}${formalsArg})"
+          else
+            "${lambdaCtor}(lambda ${paramName}: (${join ", " (allElements ++ [ bodyStr ])})[-1]${formalsArg})";
+
+        astJson = params.ast or null;
+        tagged =
+          if astJson == null then
+            ctor
+          else
+            "Value.with_meta(${ctor}, ${builtins.toJSON astJson}, ${
+              if (params.env or null) == null then "None" else params.env
+            })";
       in
-      if allElements == [ ] then
-        "(${sanitize name} := ${lambdaCtor}(lambda ${paramName}: ${bodyStr}${formalsArg}))"
-      else
-        "(${sanitize name} := ${lambdaCtor}(lambda ${paramName}: (${
-          join ", " (allElements ++ [ bodyStr ])
-        })[-1]${formalsArg}))";
+      "(${sanitize name} := ${tagged})";
 
     # ── Program assembly ────────────────────────────────────────
     # Bare expression. No runtime included — user provides Value class.

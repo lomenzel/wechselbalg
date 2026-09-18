@@ -18,6 +18,18 @@ let
   evaluateAST = import ./eval.nix;
   purity = import ./purity.nix;
   util = import ./util.nix;
+  validate = import ./validate.nix;
+  analyze = import ./analyze.nix;
+
+  # Name of the environment parameter of a code template.  Deliberately not
+  # `__wb_env`: the Python backend uses that identifier for its let-scope dict.
+  envParam = "__wb_cenv";
+
+  emptySeen = {
+    sets = { };
+    funcs = [ ];
+    depth = 0;
+  };
 
   # ── Merge helper ────────────────────────────────────────────────
   # Merges two walk results, combining defs and keeping the later known.
@@ -58,33 +70,245 @@ let
       }
       names;
 
-  # ── Find a lambda we've already seen in its bucket ──────────────
-  findSameFunction =
-    fn: bucketKey: known:
+  # ── Runtime reify metadata for one hoisted definition ───────────
+  # `ast` is the stripped AST of the lambda; `envIR` evaluates, at the point
+  # the definition is emitted, to the attrset from which the free variables
+  # marked in that AST can be read.  Template captures come from the template
+  # environment, everything else from the enclosing generated scope.
+  reifyMeta =
+    ast: known:
     let
-      bucket = known.buckets.${bucketKey} or [ ];
+      info = analyze.reifyInfo ast;
+      hasEnv = (known._env or null) != null;
+      captured = if hasEnv then known._env.capture.mode else { };
+      localNames = builtins.filter (n: !(captured ? ${n})) info.free;
+      localEnv = ir.attrs (
+        builtins.listToAttrs (
+          builtins.map (n: {
+            name = n;
+            value = ir.var n;
+          }) localNames
+        )
+      );
     in
+    {
+      ast = builtins.toJSON info.stripped;
+      envIR =
+        if hasEnv && localNames != [ ] then
+          ir.update (ir.var known._env.param) localEnv
+        else if hasEnv then
+          ir.var known._env.param
+        else if localNames != [ ] then
+          localEnv
+        else
+          null;
+    };
+
+  # ── Walk a reified lambda's parameter list ──────────────────────
+  # Formal defaults are ASTs, so walking them can discover nested lambdas.
+  # Their defs/pending/known must be threaded out, not dropped.
+  walkParams =
+    arguments: known:
+    let
+      identifier = arguments.identifier or null;
+      ellipsis = if builtins.hasAttr "ellipsis" arguments then arguments.ellipsis else true;
+    in
+    if !(builtins.hasAttr "formals" arguments) then
+      {
+        params = {
+          inherit identifier ellipsis;
+          formals = null;
+        };
+        defs = { };
+        pending = [ ];
+        inherit known;
+      }
+    else
+      let
+        result =
+          builtins.foldl'
+            (
+              acc: f:
+              if builtins.hasAttr "defaultExpr" f then
+                let
+                  r = walkAST f.defaultExpr acc.known;
+                in
+                {
+                  formals = acc.formals ++ [
+                    {
+                      inherit (f) name;
+                      hasDefault = true;
+                      default = r.ir;
+                    }
+                  ];
+                  defs = mergeDefs acc.defs r.defs;
+                  pending = acc.pending ++ r.pending;
+                  known = r.known;
+                }
+              else
+                {
+                  formals = acc.formals ++ [
+                    {
+                      inherit (f) name;
+                      hasDefault = false;
+                      default = null;
+                    }
+                  ];
+                  inherit (acc) defs pending known;
+                }
+            )
+            {
+              formals = [ ];
+              defs = { };
+              pending = [ ];
+              inherit known;
+            }
+            arguments.formals;
+      in
+      {
+        params = {
+          inherit identifier ellipsis;
+          inherit (result) formals;
+        };
+        inherit (result) defs pending known;
+      };
+
+  # ── Name allocation ─────────────────────────────────────────────
+  # A single monotonic counter in `known` is the only allocator, so names are
+  # unique by construction and allocation is O(1).
+  alloc = prefix: known: {
+    name = "${prefix}${toString known.counter}";
+    known = known // {
+      counter = known.counter + 1;
+    };
+  };
+
+  # Mark a top-level binding as actually referenced.  A binding that is never
+  # marked is inlined at its single use site instead of being emitted.
+  markUsed =
+    name: known:
+    known
+    // {
+      used = known.used // {
+        ${name} = true;
+      };
+    };
+
+  # ── Cycle detection over the current walk path ──────────────────
+  # `sameFunction` is scanned only against the in-flight ancestor chain, never
+  # against a global table, so this is O(depth) rather than O(all closures).
+  findInFlight =
+    fn: funcs:
     builtins.foldl' (
-      acc: entry:
+      acc: e:
       if acc != null then
         acc
-      else if builtins.sameFunction fn entry.fn then
-        entry.name
+      else if builtins.sameFunction fn e.fn then
+        e.binding
       else
         null
-    ) null bucket;
+    ) null funcs;
+
+  # ── Instance memo ───────────────────────────────────────────────
+  # Without this, a closure reachable through two different environment
+  # entries is walked once per path, so a shared value *graph* is traversed as
+  # a *tree* — exponential in its depth.
+  #
+  # The memo is bucketed by template key, which is exact syntactic identity,
+  # so a bucket only ever holds instances of one source lambda and the scan is
+  # short.  The cap bounds templates that are instantiated once per data item
+  # (thousands of them, essentially never revisited) and would otherwise make
+  # the scan quadratic; those still terminate via `findInFlight`.
+  instanceCap = 64;
+
+  findInstance =
+    fn: instances:
+    builtins.foldl' (
+      acc: e:
+      if acc != null then
+        acc
+      else if builtins.sameFunction fn e.fn then
+        e.binding
+      else
+        null
+    ) null instances;
+
+  # Confirm a fingerprint match between two attrsets by comparing the first
+  # function-valued attribute with `sameFunction`.
+  # Returns true / false / null (inconclusive — no comparable attribute).
+  confirmSameSet =
+    a: b:
+    builtins.foldl' (
+      acc: n:
+      if acc != null then
+        acc
+      else
+        let
+          t = builtins.tryEval (
+            if builtins.isFunction a.${n} && builtins.isFunction b.${n} then
+              builtins.sameFunction a.${n} b.${n}
+            else
+              null
+          );
+        in
+        if t.success && t.value != null then t.value else null
+    ) null (builtins.attrNames a);
+
+  # ── Resolve one captured environment entry ──────────────────────
+  # `entry.env` is the reified `closureEnvValue` thunk of the root variable;
+  # `entry.path` is the statically narrowed selection below it.
+  # Never lets an unevaluatable capture abort the whole translation.
+  resolveCapture =
+    entry:
+    let
+      r = builtins.tryEval (builtins.foldl' (acc: p: acc.${p}) entry.env entry.path);
+    in
+    if !r.success then
+      { ok = false; }
+    else
+      let
+        t = builtins.tryEval (builtins.typeOf r.value);
+        p = builtins.tryEval (purity.isPure r.value);
+      in
+      if !t.success then
+        { ok = false; }
+      else if t.value == "path" then
+        {
+          ok = true;
+          inherit (r) value;
+        }
+      else if !p.success || !p.value.pure then
+        { ok = false; }
+      else
+        {
+          ok = true;
+          inherit (r) value;
+        };
 
   # ── Walk a Nix value (already evaluated) ────────────────────────
-  # seenSets: attrset of fingerprints of ancestor attrsets being walked.
-  # Used to detect circular attrset references (e.g. functor.type in nixpkgs).
+  # seen = {
+  #   sets  : { <fingerprint> = { binding; value; }; }  ancestor attrsets
+  #   funcs : [ { fn; binding; } ]                      ancestor closures
+  #   depth : int                                       safety net
+  # }
   walkValue =
-    value: known: seenSets:
+    value: known: seen:
     let
       type = builtins.typeOf value;
       _ = if type == "path" then true else purity.assertPure value;
     in
 
-    if (type == "set" || type == "list") && util.JSONOptimizable value then
+    if seen.depth > 500 then
+      {
+        ir = ir.primopApp "throw" [
+          (ir.string "wechselbalg: value nesting too deep (possible cycle)")
+        ];
+        defs = { };
+        pending = [ ];
+        inherit known;
+      }
+
+    else if (type == "set" || type == "list") && util.JSONOptimizable value then
       # skip walking of pure JSON-optimizable sets/lists — just emit IR converting it to String literal and parsing at runtime
       {
         ir = ir.primopApp "fromJSON" [ (ir.string (builtins.toJSON value)) ];
@@ -134,12 +358,15 @@ let
 
     else if type == "list" then
       let
+        seen' = seen // {
+          depth = seen.depth + 1;
+        };
         result =
           builtins.foldl'
             (
               acc: elem:
               let
-                r = walkValue elem acc.known seenSets;
+                r = walkValue elem acc.known seen';
               in
               {
                 elements = acc.elements ++ [ r.ir ];
@@ -196,10 +423,23 @@ let
         # Hash fingerprints for wide sets (like licenses) to avoid 10KB attribute keys
         fingerprint =
           if builtins.length names > 10 then builtins.hashString "sha256" rawFingerprint else rawFingerprint;
+
+        ancestor = seen.sets.${fingerprint} or null;
+        # A fingerprint collision is only evidence; confirm it by comparing a
+        # function-valued attribute.  `null` means we could not tell.
+        confirmed = if ancestor == null then false else confirmSameSet value ancestor.value;
       in
-      if builtins.hasAttr fingerprint seenSets then
-        # Circular attrset reference detected — emit a let-bound throw so
-        # the error message string is defined once, shared across all entries.
+      if ancestor != null && confirmed == true then
+        # Genuine cycle: refer to the shared binding that is being built.
+        {
+          ir = ir.ref ancestor.binding;
+          defs = { };
+          pending = [ ];
+          known = markUsed ancestor.binding known;
+        }
+      else if ancestor != null && confirmed == null then
+        # Fingerprints match but nothing comparable — keep the historical
+        # behaviour and fail loudly at runtime rather than share a wrong value.
         {
           ir =
             ir.let_
@@ -223,8 +463,15 @@ let
         }
       else
         let
-          seenSets' = seenSets // {
-            ${fingerprint} = true;
+          bindingAlloc = alloc "__wb_cap_" known;
+          binding = bindingAlloc.name;
+          seen' = seen // {
+            depth = seen.depth + 1;
+            sets = seen.sets // {
+              ${fingerprint} = {
+                inherit binding value;
+              };
+            };
           };
           result =
             builtins.foldl'
@@ -249,7 +496,7 @@ let
                   }
                 else
                   let
-                    r = walkValue tryAttr.value acc.known seenSets';
+                    r = walkValue tryAttr.value acc.known seen';
                   in
                   {
                     # O(1) prepend to list instead of O(N) attrset copying with `//`
@@ -269,15 +516,28 @@ let
                 entries = [ ]; # Start with empty list
                 defs = { };
                 pending = [ ];
-                inherit known;
+                known = bindingAlloc.known;
               }
               names;
-        in
-        {
           # Single O(N) C++ conversion to attribute set at the end
-          ir = ir.attrs (builtins.listToAttrs result.entries);
-          inherit (result) defs known pending;
-        }
+          attrsIR = ir.attrs (builtins.listToAttrs result.entries);
+        in
+        if result.known.used ? ${binding} then
+          # Something inside referred back to us — materialise the shared binding.
+          {
+            ir = ir.ref binding;
+            inherit (result) defs pending;
+            known = result.known // {
+              bindings = result.known.bindings // {
+                ${binding} = attrsIR;
+              };
+            };
+          }
+        else
+          {
+            ir = attrsIR;
+            inherit (result) defs known pending;
+          }
     else if type == "lambda" then
       let
         ast = builtins.reify value;
@@ -296,7 +556,7 @@ let
               (
                 acc: arg:
                 let
-                  r = walkValue arg acc.known seenSets;
+                  r = walkValue arg acc.known (seen // { depth = seen.depth + 1; });
                 in
                 {
                   args = acc.args ++ [ r.ir ];
@@ -319,42 +579,162 @@ let
         }
       else
         let
-          bucketKey = getBucketKey ast;
-          existing = findSameFunction value bucketKey known;
+          inFlight = findInFlight value seen.funcs;
         in
-        if existing != null then
+        if inFlight != null then
+          # This exact closure instance is an ancestor of itself: tie the knot.
           {
-            ir = ir.ref existing;
+            ir = ir.ref inFlight;
             defs = { };
             pending = [ ];
-            inherit known;
+            known = markUsed inFlight known;
           }
         else
           let
-            name = util.freshFuncName known.names;
-
-            # Register in known.names AND append to the right bucket:
-            currentBucket = known.buckets.${bucketKey} or [ ];
-            known' = known // {
-              names = known.names // {
-                ${name} = true;
-              };
-              buckets = known.buckets // {
-                ${bucketKey} = currentBucket ++ [
-                  {
-                    inherit name;
-                    fn = value;
-                  }
-                ];
-              };
-            };
+            info = analyze.analyze ast;
+            memo = if info.closed then null else findInstance value (known.instances.${info.key} or [ ]);
           in
-          {
-            ir = ir.ref name;
-            defs = { };
-            pending = [ { inherit name value; } ];
-            known = known';
-          }
+          if memo != null then
+            # Already walked this exact closure instance elsewhere in the graph.
+            {
+              ir = ir.ref memo;
+              defs = { };
+              pending = [ ];
+              inherit known;
+            }
+          else
+            let
+              registered = known.templates.${info.key} or null;
+
+              tplAlloc = if registered != null then null else alloc "__wb_tpl_" known;
+              tplName = if registered != null then registered.name else tplAlloc.name;
+
+              known1 =
+                if registered != null then
+                  known
+                else
+                  tplAlloc.known
+                  // {
+                    templates = tplAlloc.known.templates // {
+                      ${info.key} = {
+                        name = tplName;
+                        inherit (info)
+                          capture
+                          envKeys
+                          closed
+                          stripped
+                          ;
+                      };
+                    };
+                  };
+
+              newPending =
+                if registered != null then
+                  [ ]
+                else
+                  [
+                    {
+                      name = tplName;
+                      inherit value;
+                      inherit (info) key;
+                    }
+                  ];
+            in
+            if info.closed then
+              # No captures: the template *is* the value. Zero allocation.
+              {
+                ir = ir.ref tplName;
+                defs = { };
+                pending = newPending;
+                known = known1;
+              }
+            else
+              let
+                cloAlloc = alloc "__wb_clo_" known1;
+                binding = cloAlloc.name;
+                bucket = known1.instances.${info.key} or [ ];
+
+                # Registered before the environment is walked, so a reference
+                # back to this closure from inside its own environment resolves
+                # to the binding instead of recursing.
+                known2 = cloAlloc.known // {
+                  instances = cloAlloc.known.instances // {
+                    ${info.key} =
+                      if builtins.length bucket >= instanceCap then
+                        bucket
+                      else
+                        bucket
+                        ++ [
+                          {
+                            fn = value;
+                            inherit binding;
+                          }
+                        ];
+                  };
+                };
+
+                seen' = seen // {
+                  depth = seen.depth + 1;
+                  funcs = [
+                    {
+                      fn = value;
+                      inherit binding;
+                    }
+                  ]
+                  ++ seen.funcs;
+                };
+
+                envResult =
+                  builtins.foldl'
+                    (
+                      acc: key:
+                      let
+                        resolved = resolveCapture info.capture.entries.${key};
+                      in
+                      if !resolved.ok then
+                        {
+                          entries = acc.entries // {
+                            ${key} = ir.primopApp "throw" [
+                              (ir.string "wechselbalg: captured variable '${key}' could not be translated")
+                            ];
+                          };
+                          inherit (acc) defs pending known;
+                        }
+                      else
+                        let
+                          r = walkValue resolved.value acc.known seen';
+                        in
+                        {
+                          entries = acc.entries // {
+                            ${key} = r.ir;
+                          };
+                          defs = mergeDefs acc.defs r.defs;
+                          pending = acc.pending ++ r.pending;
+                          known = r.known;
+                        }
+                    )
+                    {
+                      entries = { };
+                      defs = { };
+                      pending = newPending;
+                      known = known2;
+                    }
+                    info.envKeys;
+
+                closureIR = ir.closure tplName envResult.entries;
+              in
+              # Always materialised: the memo hands out `ir.ref binding`, and a
+              # stable binding is also what makes runtime `sameFunction` agree
+              # with Nix for a closure reached twice.
+              {
+                ir = ir.ref binding;
+                inherit (envResult) defs pending;
+                known = envResult.known // {
+                  bindings = envResult.known.bindings // {
+                    ${binding} = closureIR;
+                  };
+                };
+              }
 
     else if type == "path" then
       # Paths are not supported on non-Nix targets — emit a runtime error.
@@ -376,6 +756,11 @@ let
   # This handles the output of builtins.reify — the structural AST
   # of lambda bodies.  Tries compile-time eval first; falls back to
   # structural translation.
+  #
+  # `known._env` holds the capture plan of the template currently being
+  # compiled: { param; capture; }.  Free variables are read from it; they are
+  # never resolved through `closureEnvValue`, because the compiled body is
+  # shared by every closure instance of the template.
   walkAST =
     ast: known:
     let
@@ -384,76 +769,48 @@ let
     # If the AST can be fully evaluated at Nix eval time, just walk the
     # resulting value (turns it into IR literals / refs).
     if evalResult.success && builtins.typeOf evalResult.value != "lambda" then
-      walkValue evalResult.value known { }
+      walkValue evalResult.value known emptySeen
 
     else if ast._expr == "lambda" then
-      # Nested lambda inside a lambda body — same hoisting logic
+      # Nested lambda inside a lambda body.  It may reference parameters of the
+      # enclosing lambda, so it is never registered as a shareable template —
+      # it stays a scope-local definition (invariant I6).
       let
-        name = if builtins.hasAttr "name" ast then ast.name else util.freshFuncName known.names;
-        # We don't have the actual Nix function value here (it's an AST),
-        # so we can't use sameFunction.  Just register the name to claim it.
-        known' = known // {
-          names = known.names // {
-            ${name} = true;
-          };
-        };
-        bodyResult = walkAST ast.value.body known';
-        splitBody = splitDefs bodyResult.defs;
-
-        params = {
-          identifier = ast.value.arguments.identifier or null;
-          formals =
-            if builtins.hasAttr "formals" ast.value.arguments then
-              builtins.map (f: {
-                inherit (f) name;
-                hasDefault = builtins.hasAttr "defaultExpr" f;
-                default =
-                  if builtins.hasAttr "defaultExpr" f then (walkAST f.defaultExpr bodyResult.known).ir else null;
-              }) ast.value.arguments.formals
-            else
-              null;
-          ellipsis =
-            if builtins.hasAttr "ellipsis" ast.value.arguments then ast.value.arguments.ellipsis else true;
-        };
+        nameAlloc = alloc "__wb_func_" known;
+        name = nameAlloc.name;
+        bodyResult = walkAST ast.value.body nameAlloc.known;
+        paramsResult = walkParams ast.value.arguments bodyResult.known;
+        splitBody = splitDefs (mergeDefs bodyResult.defs paramsResult.defs);
       in
       {
         ir = ir.ref name;
         defs = {
-          ${name} = ir.funcDef params bodyResult.ir splitBody.local;
+          ${name} = ir.funcDef (paramsResult.params // reifyMeta ast known) bodyResult.ir splitBody.local;
         }
         // splitBody.hoistable;
-        known = bodyResult.known;
-        pending = bodyResult.pending or [ ];
+        known = paramsResult.known;
+        pending = (bodyResult.pending or [ ]) ++ paramsResult.pending;
       }
 
     else if ast._expr == "var" then
       if builtins.hasAttr "closureEnvValue" ast.value then
         let
-          envVal = ast.value.closureEnvValue;
-
-          isSelf =
-            known ? _currentFn
-            && (builtins.typeOf envVal == "lambda")
-            && builtins.sameFunction envVal known._currentFn.value;
-
-          # Check if the value can be safely inspected.
-          # Some nixpkgs values (filesets, etc.) throw on inspection.
-          canWalk = builtins.tryEval (builtins.seq envVal (builtins.typeOf envVal));
+          env =
+            if (known._env or null) == null then
+              throw "wechselbalg: internal: free variable '${ast.value.name}' walked outside a template body"
+            else
+              known._env;
+          mode =
+            env.capture.mode.${ast.value.name}
+              or (throw "wechselbalg: internal: free variable '${ast.value.name}' is missing from the capture plan");
         in
-        if isSelf then
-          {
-            ir = ir.ref known._currentFn.name;
-            defs = { };
-            pending = [ ];
-            inherit known;
-          }
-        else if canWalk.success then
-          walkValue envVal known { }
+        # Invariant I2: the capture plan decided this root is read whole, so a
+        # bare read must be exactly what the instantiation site captured.
+        if mode != "whole" then
+          throw "wechselbalg: internal: free variable '${ast.value.name}' is captured as '${mode}' but read whole"
         else
           {
-            ir = ir.primopApp "throw" [
-              (ir.string "wechselbalg: closure variable '${ast.value.name}' could not be translated")
-            ];
+            ir = ir.select (ir.var env.param) [ (ir.string ast.value.name) ];
             defs = { };
             pending = [ ];
             inherit known;
@@ -849,51 +1206,81 @@ let
 
     else if ast._expr == "select" then
       let
-        exprR = walkAST ast.value.expression known;
-        pathR =
-          builtins.foldl'
-            (
-              acc: p:
-              let
-                r = walkAST p acc.known;
-              in
-              {
-                path = acc.path ++ [ r.ir ];
-                defs = mergeDefs acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
-                known = r.known;
-              }
-            )
-            {
-              path = [ ];
-              defs = exprR.defs;
-              pending = exprR.pending;
-              known = exprR.known;
-            }
-            ast.value.path;
-
-        hasDefault = builtins.hasAttr "default" ast.value;
-        defaultR =
-          if hasDefault then
-            walkAST ast.value.default pathR.known
+        # Path narrowing.  Mirrors analyze.nix exactly: if the capture plan
+        # decided this root is reached only through static paths, read the
+        # narrowed value straight out of the environment instead of capturing
+        # the whole container.
+        sp = analyze.staticPath ast.value.path;
+        narrowed =
+          if
+            !(builtins.hasAttr "default" ast.value)
+            && sp != null
+            && sp != [ ]
+            && analyze.isFreeVar ast.value.expression
+            && (known._env or null) != null
+            && (known._env.capture.mode.${ast.value.expression.value.name} or null) == "narrow"
+          then
+            analyze.joinKey ast.value.expression.value.name sp
           else
-            {
-              ir = null;
-              defs = { };
-              pending = [ ];
-              known = pathR.known;
-            };
-
-        allDefs = mergeDefs pathR.defs defaultR.defs;
-        allPending = pathR.pending ++ defaultR.pending;
+            null;
       in
-      {
-        ir =
-          if hasDefault then ir.selectOr exprR.ir pathR.path defaultR.ir else ir.select exprR.ir pathR.path;
-        defs = allDefs;
-        pending = allPending;
-        known = defaultR.known;
-      }
+      if narrowed != null then
+        if !(known._env.capture.entries ? ${narrowed}) then
+          throw "wechselbalg: internal: narrowed capture '${narrowed}' is missing from the capture plan"
+        else
+          {
+            ir = ir.select (ir.var known._env.param) [ (ir.string narrowed) ];
+            defs = { };
+            pending = [ ];
+            inherit known;
+          }
+      else
+        let
+          exprR = walkAST ast.value.expression known;
+          pathR =
+            builtins.foldl'
+              (
+                acc: p:
+                let
+                  r = walkAST p acc.known;
+                in
+                {
+                  path = acc.path ++ [ r.ir ];
+                  defs = mergeDefs acc.defs r.defs;
+                  pending = acc.pending ++ r.pending;
+                  known = r.known;
+                }
+              )
+              {
+                path = [ ];
+                defs = exprR.defs;
+                pending = exprR.pending;
+                known = exprR.known;
+              }
+              ast.value.path;
+
+          hasDefault = builtins.hasAttr "default" ast.value;
+          defaultR =
+            if hasDefault then
+              walkAST ast.value.default pathR.known
+            else
+              {
+                ir = null;
+                defs = { };
+                pending = [ ];
+                known = pathR.known;
+              };
+
+          allDefs = mergeDefs pathR.defs defaultR.defs;
+          allPending = pathR.pending ++ defaultR.pending;
+        in
+        {
+          ir =
+            if hasDefault then ir.selectOr exprR.ir pathR.path defaultR.ir else ir.select exprR.ir pathR.path;
+          defs = allDefs;
+          pending = allPending;
+          known = defaultR.known;
+        }
 
     else if ast._expr == "primop" then
       {
@@ -910,7 +1297,7 @@ let
             (
               acc: arg:
               let
-                r = walkValue arg acc.known { };
+                r = walkValue arg acc.known emptySeen;
               in
               {
                 args = acc.args ++ [ r.ir ];
@@ -1024,154 +1411,85 @@ let
         inherit known;
       };
 
-  # ── Walk a single lambda body ───────────────────────────────────
-  # Compiles a reified lambda's body in isolation.
+  # ── Compile one code template ───────────────────────────────────
+  # Templates are keyed by the stripped AST, so this runs exactly once per
+  # distinct source lambda no matter how many closure instances exist.
+  #
+  # A template with captures is emitted as a curried definition
+  #   <name> = __wb_cenv: <inner>
+  # where `<inner>` is an ordinary local definition holding the real
+  # parameters and body.  That reuses the existing localDefs machinery, keeps
+  # `functionArgs` metadata on the inner lambda, and needs no backend support.
   walkFunctionBody =
     {
       name,
       value,
+      key,
       known,
     }:
     let
       ast = builtins.reify value;
+      template = known.templates.${key};
 
-      bucketKey = getBucketKey ast;
-
-      currentBucket = known.buckets.${bucketKey} or [ ];
-      alreadyInBucket = builtins.any (e: e.name == name) currentBucket;
-
-      known' = known // {
-        names = known.names // {
-          ${name} = true;
-        };
-        buckets = known.buckets // {
-          ${bucketKey} =
-            if alreadyInBucket then
-              currentBucket
-            else
-              currentBucket
-              ++ [
-                {
-                  inherit name;
-                  fn = value;
-                }
-              ];
-        };
-        # Keep track of current compiling function for direct self-recursion checks
-        _currentFn = { inherit name value; };
-      };
-      bodyResult = walkAST ast.value.body known';
-      splitBody = splitDefs bodyResult.defs;
-
-      params = {
-        identifier = ast.value.arguments.identifier or null;
-        formals =
-          if builtins.hasAttr "formals" ast.value.arguments then
-            builtins.map (f: {
-              inherit (f) name;
-              hasDefault = builtins.hasAttr "defaultExpr" f;
-              default =
-                if builtins.hasAttr "defaultExpr" f then (walkAST f.defaultExpr bodyResult.known).ir else null;
-            }) ast.value.arguments.formals
-          else
-            null;
-        ellipsis =
-          if builtins.hasAttr "ellipsis" ast.value.arguments then ast.value.arguments.ellipsis else true;
-      };
-      formatArgs =
-        args:
-        if args ? identifier && args.identifier != null then
-          args.identifier
-        else if args ? formals then
-          let
-            names = builtins.map (f: f.name + (if f ? defaultExpr then " ? ..." else "")) args.formals;
-            ellipsis = if args.ellipsis or false then [ "..." ] else [ ];
-          in
-          "{ " + builtins.concatStringsSep ", " (names ++ ellipsis) + " }"
+      known' =
+        if template.closed then
+          known // { _env = null; }
         else
-          "none";
-    in
-    builtins.trace
-      ''
-        → ${name} (${formatArgs ast.value.arguments})
-            body._expr = ${ast.value.body._expr or "unknown"}, call target = 
-              ${
-                if ast.value.body._expr == "call" then
-                  (
-                    if ast.value.body.value.function._expr == "var" then
-                      ast.value.body.value.function.value.name
-                    else
-                      ast.value.body.value.function._expr
-                  )
-                else if ast.value.body._expr == "select" then
-                  builtins.concatStringsSep "." (
-                    builtins.map (p: if builtins.isString (p.value or null) then p.value else "<expr>") (
-                      ast.value.body.value.path or [ ]
-                    )
-                  )
-                else
-                  "other"
-              }''
-      ({
-        def = {
-          ${name} = ir.funcDef params bodyResult.ir splitBody.local // {
+          known
+          // {
+            _env = {
+              param = envParam;
+              inherit (template) capture;
+            };
+          };
+
+      bodyResult = walkAST ast.value.body known';
+      paramsResult = walkParams ast.value.arguments bodyResult.known;
+      splitBody = splitDefs (mergeDefs bodyResult.defs paramsResult.defs);
+
+      innerDef = ir.funcDef (paramsResult.params // reifyMeta ast known') bodyResult.ir splitBody.local;
+
+      # The definition the rest of the program refers to by `name`.
+      hoisted =
+        if template.closed then
+          innerDef // { _hoistable = true; }
+        else
+          ir.funcDef
+            {
+              identifier = envParam;
+              formals = null;
+              ellipsis = true;
+            }
+            (ir.ref "${name}__fn")
+            {
+              "${name}__fn" = innerDef;
+            }
+          // {
             _hoistable = true;
           };
-        }
-        // splitBody.hoistable;
-        known = bodyResult.known;
-        # Pass along any new lambdas discovered while compiling this body
-        pending = bodyResult.pending or [ ];
-      });
-
-  # ── Extendable Bucket Key ───────────────────────────────────────
-  # This key only narrows candidates for builtins.sameFunction.
-  getBucketKey =
-    ast:
-    let
-      args = ast.value.arguments;
-      body = ast.value.body;
-
-      argFeature =
-        if builtins.hasAttr "identifier" args && args.identifier != null then
-          "arg:${args.identifier}"
-        else if builtins.hasAttr "formals" args then
-          "formals:${toString (builtins.length args.formals)}"
-        else
-          "none";
-
-      bodyFeature = "body:${body._expr or "unknown"}";
-
-      detailFeature =
-        if body._expr == "let" then
-          let
-            letAttrs = body.value.attrs.value.attrs or { };
-            bindingNames = builtins.concatStringsSep "," (builtins.attrNames letAttrs);
-            innerReturn = body.value.body._expr or "unknown";
-          in
-          "bindings:[${bindingNames}]|in:${innerReturn}"
-        else if body._expr == "call" then
-          let
-            fnNode = body.value.function;
-            fnTarget = if fnNode._expr == "var" then fnNode.value.name else fnNode._expr;
-            argc = toString (builtins.length body.value.args);
-          in
-          "calls:${fnTarget}|argc:${argc}"
-        else if body._expr == "attrSet" then
-          "attrs:${toString (builtins.length (builtins.attrNames (body.value.attrs or { })))}"
-        else
-          "";
     in
-    "${argFeature}|${bodyFeature}" + (if detailFeature != "" then "|${detailFeature}" else "");
+    {
+      def = {
+        ${name} = hoisted;
+      }
+      // splitBody.hoistable;
+      known = paramsResult.known;
+      # Pass along any new lambdas discovered while compiling this body
+      pending = (bodyResult.pending or [ ]) ++ paramsResult.pending;
+    };
 
   # ── Top-level entry point ───────────────────────────────────────
   walk =
     value:
     let
       initial = walkValue value {
-        names = { };
-        buckets = { };
-      } { };
+        counter = 0;
+        templates = { };
+        instances = { };
+        bindings = { };
+        used = { };
+        _env = null;
+      } emptySeen;
 
       initialState = {
         inherit (initial) ir defs known;
@@ -1183,7 +1501,7 @@ let
 
       # Driven purely by C++'s for-loop: stack depth is ALWAYS 1.
       finalState = builtins.foldl' (
-        state: i:
+        state: _i:
         if state.queue == [ ] then
           state # Queue is empty: fast no-op for remaining fuel
         else
@@ -1192,73 +1510,58 @@ let
             restQueue = builtins.tail state.queue;
 
             compiled = walkFunctionBody {
-              inherit (item) name value;
+              inherit (item) name value key;
               inherit (state) known;
             };
           in
-          builtins.trace
-            "[Wechselbalg] [Debug] walk ${toString i}; todo: ${toString (builtins.length restQueue)}"
-            ({
-              inherit (state) ir;
-              defs = mergeDefs state.defs compiled.def;
-              known = compiled.known;
-              # Push newly discovered items onto the queue
-              queue = restQueue ++ (compiled.pending or [ ]);
-            })
+          {
+            inherit (state) ir;
+            defs = mergeDefs state.defs compiled.def;
+            known = compiled.known;
+            # Push newly discovered items onto the queue
+            queue = restQueue ++ (compiled.pending or [ ]);
+          }
       ) initialState fuel;
 
-      # ── Telemetry & Bucket Profiling ────────────────────────────────
-      buckets = finalState.known.buckets or { };
-      bucketKeys = builtins.attrNames buckets;
-      numBuckets = builtins.length bucketKeys;
+      bindings = finalState.known.bindings;
 
-      bucketList = builtins.map (k: {
-        key = k;
-        size = builtins.length buckets.${k};
-      }) bucketKeys;
+      # Shared captures and knotted closures become a recursive `let` around
+      # the root expression.  Every backend already forward-declares and thunks
+      # let bindings, so reference cycles resolve without new machinery.
+      rootIR = if bindings == { } then finalState.ir else ir.let_ bindings finalState.ir { };
 
-      # Sort buckets from largest to smallest
-      sortedBuckets = builtins.sort (a: b: a.size > b.size) bucketList;
-
-      totalLambdas = builtins.foldl' (acc: b: acc + b.size) 0 sortedBuckets;
-      largest =
-        if sortedBuckets != [ ] then
-          builtins.head sortedBuckets
-        else
-          {
-            key = "none";
-            size = 0;
-          };
-      top5 = builtins.genList (i: builtins.elemAt sortedBuckets i) (
-        if numBuckets < 5 then numBuckets else 5
-      );
-
-      # Pretty-print top 5 buckets
-      top5Formatted = builtins.concatStringsSep "\n" (
-        builtins.map (b: "  - [${toString b.size} lambdas] ${b.key}") top5
-      );
+      result = {
+        inherit (finalState) defs;
+        ir = rootIR;
+      };
 
       report = ''
 
-        ═══════════════ Wechselbalg Bucket Telemetry ═══════════════
-        Total Hoisted Lambdas : ${toString totalLambdas}
-        Total Buckets         : ${toString numBuckets}
-        Average Bucket Size   : ${if numBuckets == 0 then "0" else toString (totalLambdas / numBuckets)}
-        Largest Bucket        : ${toString largest.size} lambdas ("${largest.key}")
-        Top Buckets:
-        ${top5Formatted}
-        ════════════════════════════════════════════════════════════
+        ═════════════ Wechselbalg Template Telemetry ═════════════
+        Code templates   : ${toString (builtins.length (builtins.attrNames finalState.known.templates))}
+        Hoisted defs     : ${toString (builtins.length (builtins.attrNames finalState.defs))}
+        Shared bindings  : ${toString (builtins.length (builtins.attrNames bindings))}
+        Names allocated  : ${toString finalState.known.counter}
+        ══════════════════════════════════════════════════════════
       '';
 
+      # Invariant I4: every ref/var resolves. Catches dangling hoisted
+      # definitions, which otherwise only surface as runtime errors in the
+      # generated target code.
+      errors = validate.check result;
+      shown = builtins.genList (i: builtins.elemAt errors i) (
+        if builtins.length errors > 20 then 20 else builtins.length errors
+      );
+
     in
-    builtins.trace "[Wechselbalg] [Debug] Phase 1: Walking root value..." (
-      if finalState.queue != [ ] then
-        throw "wechselbalg: exceeded fuel limit while compiling functions"
-      else
-        builtins.trace report {
-          inherit (finalState) ir defs;
-        }
-    );
+    if finalState.queue != [ ] then
+      throw "wechselbalg: exceeded fuel limit while compiling functions"
+    else if errors != [ ] then
+      throw ''
+        wechselbalg: internal IR validation failed (${toString (builtins.length errors)} error(s)):
+          ${builtins.concatStringsSep "\n  " shown}''
+    else
+      builtins.trace report result;
 
 in
 walk

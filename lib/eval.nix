@@ -33,9 +33,13 @@ let
       }
 
     else if _expr == "var" then
+      # Never resolve a free variable through its `closureEnvValue`.
+      # Compiled bodies are shared between every closure instance of the same
+      # template, so folding one instance's captured value into the body would
+      # silently miscompile all the others.
       {
-        success = builtins.hasAttr "closureEnvValue" value;
-        value = if builtins.hasAttr "closureEnvValue" value then value.closureEnvValue else null;
+        success = false;
+        value = null;
       }
 
     else if _expr == "concatString/addition" then

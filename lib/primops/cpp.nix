@@ -536,4 +536,17 @@
       });
     })
   '';
+
+  # ── AST introspection (self-hosting) ──────────────────────────
+  reify = ''
+    Value::lambda([](const Value& f) { return Value::reify(f); })
+  '';
+
+  sameFunction = ''
+    Value::lambda([](const Value& a) {
+      return Value::lambda([a](const Value& b) {
+        return Value::fromBool(Value::sameFunction(a, b));
+      });
+    })
+  '';
 }

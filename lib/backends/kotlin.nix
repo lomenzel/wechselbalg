@@ -119,6 +119,9 @@ let
       name:
       "Value.lambda { throw RuntimeException(\"wechselbalg: primop '${name}' is not implemented in Kotlin\") }";
 
+    # Nix compares primops by name, so carry the name into the runtime.
+    renderPrimop = name: impl: "Value.primop(${builtins.toJSON name}, ${impl})";
+
     # ── Literals ────────────────────────────────────────────────
     renderInt = value: "Value.fromInt(${toString value}L)";
     renderFloat = value: "Value.fromFloat(${builtins.toJSON value})";
@@ -272,12 +275,23 @@ let
 
         lambdaCtor = if formalsMetadata != null then "Value.lambdaWithFormals" else "Value.lambda";
         formalsArg = if formalsMetadata != null then ", ${formalsMetadata}" else "";
+
+        ctor = ''
+          ${lambdaCtor}({ ${paramName} ->
+            ${bindings}
+            ${bodyStr}
+          }${formalsArg})'';
+
+        astJson = params.ast or null;
+        tagged =
+          if astJson == null then
+            ctor
+          else
+            "Value.withMeta(${ctor}, ${builtins.toJSON astJson}, ${
+              if (params.env or null) == null then "null" else params.env
+            })";
       in
-      ''
-        ${sanitize name} = ${lambdaCtor}({ ${paramName} ->
-          ${bindings}
-          ${bodyStr}
-        }${formalsArg})'';
+      "${sanitize name} = ${tagged}";
 
     # ── Program assembly ────────────────────────────────────────
     renderProgram =
