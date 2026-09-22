@@ -1,6 +1,6 @@
 # Post-walk IR validator.
 #
-# Implements invariant I4 from PLAN-closure-conversion.md: every `ref` / `var`
+# Implements invariant I4 from docs/closure-conversion.md: every `ref` / `var`
 # node must resolve to a name that is in scope — a top-level def, a top-level
 # binding, an enclosing `localDefs` entry, a function parameter, or an
 # enclosing `let` binding.

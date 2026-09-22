@@ -14,9 +14,14 @@ lib: [
     expected.toBe = 12;
   }
 
-  # =======================================================
-  # ===      FAILING TEST NEEDS INVESTIGATION           ===
-  # =======================================================
+  {
+    description = "reserved JS identifier 'arguments' as lambda parameter";
+    func = arguments: ((y: arguments.a + y) 7);
+    params = {
+      a = 5;
+    };
+    expected.toBe = 12;
+  }
 
   {
     description = "circular translation :)";
@@ -36,9 +41,7 @@ lib: [
         };
         evalString = nix-nix.evalString;
       in
-      params:
-
-      (evalString { inherit lib; } params); # .success # should fail, but in the logs, the error message and value should be visible
+      params: (evalString { inherit lib; } params); # .success # should fail, but in the logs, the error message and value should be visible
     params = "lib.toJS (x: x)";
     expected.toBe =
       let

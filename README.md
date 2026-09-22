@@ -19,6 +19,14 @@ may still be rough, incomplete, or contain issues. Use at your own risk.
 
 Note: Wechselbalg depends on a fork of Nix that exposes the builtins
 `reify` and `sameFunction`. See the fork at https://github.com/lomenzel/nix.
+The fork only exposes them with the experimental feature `ast-introspection`
+enabled, e.g.:
+
+```sh
+nix run github:lomenzel/nix -- --extra-experimental-features ast-introspection flake check
+```
+
+In the dev shell (`nix develop`) the wrapped `nix` passes this flag for you.
 
 An overlay (`overlays.default`) adds helper functions to `lib`. The primary
 translators are:

@@ -109,7 +109,7 @@
           default = pkgs.mkShell {
             buildInputs = [
               (pkgs.writeShellScriptBin "nix" ''
-                ulimit -s unlimited && ${nixFork.packages.${system}.nix}/bin/nix --option max-call-depth 10000000 "$@"
+                ${nixFork.packages.${system}.nix}/bin/nix --extra-experimental-features ast-introspection "$@"
               '')
               pkgs.llvmPackages_22.clang-tools
               pkgs.gdb

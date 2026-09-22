@@ -58,6 +58,8 @@ let
         "float"
         "value"
         "Value"
+        "arguments"
+        "eval"
       ];
       # Replace characters valid in Nix identifiers but not in JS
       cleaned = builtins.replaceStrings [ "'" "-" ] [ "_q" "_h" ] name;

@@ -1150,7 +1150,7 @@ let
         # (e.g. `{ ${null} = 1; }` yields `{}`), so each entry is
         # wrapped in `if name != null then listToAttrs [...] else {}`.
         hasDynamic = ast.value.dynamicAttrs != [ ];
-        hasStatic = pairs != [ ];
+        hasStatic = names != [ ];
         dynamicResult =
           foldWalk
             (
@@ -1197,10 +1197,10 @@ let
         # All defs stay local (they may reference entry-bound variables).
         let
           refs = builtins.listToAttrs (
-            builtins.map (e: {
-              name = e.name;
-              value = ir.var e.name;
-            }) pairs
+            builtins.map (name: {
+              inherit name;
+              value = ir.var name;
+            }) names
           );
           staticBody = ir.attrs refs;
           body = if hasDynamic then ir.update staticBody dynamicIR else staticBody;

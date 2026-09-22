@@ -1,6 +1,6 @@
 # Closure conversion — shared code templates with per-instance environments.
 #
-# These are the regression tests for PLAN-closure-conversion.md.  Each one
+# These are the regression tests for docs/closure-conversion.md.  Each one
 # pins down a way the old runtime-identity walker could (or the new one still
 # could) silently miscompile.
 [
