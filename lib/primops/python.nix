@@ -63,7 +63,7 @@
   trace = "Value.lambda_(lambda msg: Value.lambda_(lambda val: __wb_trace(msg, val)))";
   warn = "Value.lambda_(lambda msg: Value.lambda_(lambda val: __wb_warn(msg, val)))";
 
-  seq = "Value.lambda_(lambda a: Value.lambda_(lambda b: b))";
+  seq = "Value.lambda_(lambda a: Value.lambda_(lambda b: (Value._force_deep(a), b)[1]))";
   deepSeq = "Value.lambda_(lambda a: Value.lambda_(lambda b: (a.to_json_(), b)[1]))";
 
   substring = "Value.lambda_(lambda start: Value.lambda_(lambda length: Value.lambda_(lambda s: Value.from_string(s.as_string()[start.as_int():] if length.as_int() < 0 else s.as_string()[start.as_int():start.as_int() + length.as_int()]))))";

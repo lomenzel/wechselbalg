@@ -159,6 +159,8 @@ let
   # more than twice and longer than 8 characters.
   buildStringDedup =
     walkResult:
+    # TODO reenable string dedup, its just a test for web-nix to disable it
+    ##{};
     let
       allStrings = collectStringsNode walkResult.ir ++ collectStringsDefs walkResult.defs;
       grouped = builtins.groupBy (s: s) allStrings;

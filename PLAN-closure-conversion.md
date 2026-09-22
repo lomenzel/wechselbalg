@@ -120,6 +120,26 @@ A key-based guard ties the knot to `k` and emits `x: k (k x)` instead of
 O(n²) bucket scans, `findSameFunction` and `getBucketKey` — which is the actual
 goal — without losing instance identity.
 
+> **Correction (found by the `web-nix` build after stage 6).** An ancestor-only
+> scan is enough for _correctness_ but not for _performance_. A closure
+> reachable through two different environment entries is then walked once per
+> path, so a shared value **graph** is traversed as a **tree** — exponential in
+> its depth. `pkgs.lib.evalString` hung and was OOM-killed; a synthetic
+> diamond took 1.5 s at depth 12 and 24 s at depth 16.
+>
+> Instance sharing is therefore mandatory too. It is restored as
+> `known.instances`, a memo bucketed by **template key** (exact syntactic
+> identity, so a bucket only ever holds instances of one source lambda) and
+> capped at `instanceCap = 64` entries so the scan stays O(1) for templates
+> that are instantiated once per data item — those still terminate via
+> `findInFlight`. The memo entry is registered _before_ the environment is
+> walked, and every capturing closure is now always materialised as a
+> top-level binding so the memo always has a name to hand out.
+>
+> Result: depth 64 in 0.75 s, `web-nix` in 4.3 s with 197 templates.
+> Regression test: "a shared closure graph is walked once per node, not once
+> per path" in `tests/closures.test.nix`.
+
 ### 2.4 The captured-environment graph is cyclic; `defs`/IR is a tree — BLOCKER
 
 `lib.foo` captures `lib`, and `lib` contains `lib.foo`. Even with instance

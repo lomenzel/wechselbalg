@@ -72,7 +72,7 @@
     } }
   '';
 
-  seq = "Value.lambda { _ -> Value.lambda { b -> b } }";
+  seq = "Value.lambda { a -> Value.lambda { b -> a.force(); b } }";
   deepSeq = "Value.lambda { a -> Value.lambda { b -> a.toJSON_(); b } }";
 
   substring = "Value.lambda { start -> Value.lambda { len -> Value.lambda { str -> Primops.substring(start, len, str) } } }";

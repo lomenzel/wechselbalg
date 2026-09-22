@@ -258,27 +258,14 @@ let
           else
             "";
 
-        # Check if any default expression references another formal name.
-        # If so, we need the two-pass (forward-declare + assign) pattern.
-        needsFwdDecl =
-          formals != null
-          && builtins.any (
-            f:
-            f.hasDefault
-            && builtins.any (
-              other:
-              other.name != f.name && builtins.match ".*\\(\\*${sanitize other.name}\\).*" f.default != null
-            ) formals
-          ) formals;
-
         formalsFwdDecls =
-          if formals != null && needsFwdDecl then
+          if formals != null then
             join "\n    " (builtins.map (f: "auto ${sanitize f.name} = std::make_shared<Value>();") formals)
           else
             "";
 
         formalsBindings =
-          if formals != null && needsFwdDecl then
+          if formals != null then
             join "\n    " (
               builtins.map (
                 f:
@@ -293,23 +280,6 @@ let
                   ''
                 else
                   "*${sanitize f.name} = Value::thunk([=]() -> Value { return ${paramName}[${builtins.toJSON f.name}]; });"
-              ) formals
-            )
-          else if formals != null then
-            join "\n    " (
-              builtins.map (
-                f:
-                if f.hasDefault then
-                  ''
-                    auto ${sanitize f.name} = std::make_shared<Value>(Value::thunk([=]() -> Value {
-                      if (${paramName}.hasAttr(${builtins.toJSON f.name})) {
-                        return ${paramName}[${builtins.toJSON f.name}];
-                      }
-                      return ${f.default};
-                    }));
-                  ''
-                else
-                  "auto ${sanitize f.name} = std::make_shared<Value>(Value::thunk([=]() -> Value { return ${paramName}[${builtins.toJSON f.name}]; }));"
               ) formals
             )
           else
@@ -334,18 +304,22 @@ let
             "";
 
         # Forward-declare local defs as shared_ptr so mutual references work
-        localDefFwdDecls = builtins.map (
-          n: "auto ${sanitize n} = std::make_shared<Value>();"
-        ) localDefNames;
-        localDefsBlock = if localDefs == [ ] then "" else join "\n    " (localDefFwdDecls ++ localDefs);
+        localDefFwdDecls =
+          if localDefNames != [ ] then
+            join "\n    " (builtins.map (n: "auto ${sanitize n} = std::make_shared<Value>();") localDefNames)
+          else
+            "";
+
+        localDefsBlock = if localDefs == [ ] then "" else join "\n    " localDefs;
 
         bindings = builtins.concatStringsSep "\n    " (
           builtins.filter (s: s != "") [
             identifierBinding
             formalsFwdDecls
+            localDefFwdDecls
             formalsBindings
-            ellipsisCheck
             localDefsBlock
+            ellipsisCheck
           ]
         );
 

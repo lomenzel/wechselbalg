@@ -29,6 +29,16 @@ let
 
   joinKey = root: path: builtins.concatStringsSep "." ([ root ] ++ path);
 
+  # Name-keyed AST maps (attrset entries, let bindings) are carried as an
+  # explicit list of pairs rather than a Nix attrset.  User attribute names
+  # must never become Nix attrset keys: `builtins.toJSON`, which hashes the
+  # stripped AST and ships it to the runtimes, special-cases `__toString` and
+  # `outPath` and would try to *call* the AST node stored under them.
+  # `builtins.attrNames` is sorted, so the list is deterministic.
+  pairsOf = entries: {
+    __pairs = entries;
+  };
+
   # ── Single pass: strip + collect uses ───────────────────────────
   # Returns { stripped; uses; } where `uses` is a list of
   #   { root = <var name>; path = [ <attr> ] | null; env = <thunk>; }
@@ -261,7 +271,7 @@ let
           _expr = "attrSet";
           value = {
             recursive = v.recursive or false;
-            attrs = builtins.listToAttrs (
+            attrs = pairsOf (
               builtins.map (a: {
                 name = a.n;
                 value = a.r.stripped;
@@ -291,7 +301,7 @@ let
         stripped = {
           _expr = "let";
           value = {
-            attrs = builtins.listToAttrs (
+            attrs = pairsOf (
               builtins.map (x: {
                 name = x.n;
                 value = x.r.stripped;
@@ -649,7 +659,7 @@ let
           _expr = "attrSet";
           value = {
             recursive = v.recursive or false;
-            attrs = builtins.listToAttrs (
+            attrs = pairsOf (
               builtins.map (a: {
                 name = a.n;
                 value = a.r.stripped;
@@ -680,7 +690,7 @@ let
         stripped = {
           _expr = "let";
           value = {
-            attrs = builtins.listToAttrs (
+            attrs = pairsOf (
               builtins.map (x: {
                 name = x.n;
                 value = x.r.stripped;

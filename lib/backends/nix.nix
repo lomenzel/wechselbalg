@@ -33,8 +33,8 @@ let
     # Unknown primops fall back to builtins.<name> so translation proceeds.
     renderUnknownPrimop = name: "builtins.${name}";
     # ── Literals ────────────────────────────────────────────────
-    renderInt = value: toString value;
-    renderFloat = value: builtins.toJSON value;
+    renderInt = value: "(${toString value})";
+    renderFloat = value: "(${builtins.toJSON value})";
     renderString =
       value:
       # builtins.toJSON produces valid JSON strings, but Nix strings also
@@ -129,12 +129,14 @@ let
         formals = params.formals or null;
         ellipsis = params.ellipsis or true;
 
+        theArg = if identifier != null then sanitize identifier else paramName;
+
         # Build the formal parameter pattern
         formalsPart =
           if formals != null then
             let
               formalItems = builtins.map (
-                f: if f.hasDefault then "${sanitize f.name} ? ${f.default}" else sanitize f.name
+                f: if f.hasDefault then "${sanitize f.name} ? null" else sanitize f.name
               ) formals;
               formalsStr = join ", " formalItems;
               ellipsisStr = if ellipsis then if formalItems == [ ] then "..." else ", ..." else "";
@@ -143,22 +145,30 @@ let
           else
             null;
 
-        paramPattern =
-          if identifier != null && formalsPart != null then
-            "${sanitize identifier}@${formalsPart}"
-          else if formalsPart != null then
-            formalsPart
-          else if identifier != null then
-            sanitize identifier
+        paramPattern = if formalsPart != null then "${formalsPart}@${theArg}" else theArg;
+
+        formalsBindings =
+          if formals != null then
+            builtins.filter (s: s != "") (
+              builtins.map (
+                f:
+                if f.hasDefault then
+                  "${sanitize f.name} = if ${theArg} ? ${builtins.toJSON f.name} then ${theArg}.${builtins.toJSON f.name} else ${f.default};"
+                else
+                  ""
+              ) formals
+            )
           else
-            paramName;
+            [ ];
 
-        localDefsBlock = if localDefs == [ ] then "" else join "\n" localDefs;
+        localDefsBlock = if localDefs == [ ] then [ ] else localDefs;
 
-        bodyWithLocalDefs = if localDefs == [ ] then bodyStr else "(let ${localDefsBlock}\nin ${bodyStr})";
+        allLines = localDefsBlock ++ formalsBindings;
+
+        bodyWithLocalDefs =
+          if allLines == [ ] then bodyStr else "(let\n${join "\n" allLines}\nin ${bodyStr})";
       in
       "${sanitize name} = ${paramPattern}: ${bodyWithLocalDefs};";
-
     # ── Program assembly ────────────────────────────────────────
     renderProgram =
       {

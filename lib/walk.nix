@@ -31,9 +31,45 @@ let
     depth = 0;
   };
 
+  # Strict fold for accumulator walks. `builtins.foldl'` only forces the
+  # accumulator to WHNF (the outer attribute set), never its inner fields, so
+  # `update acc.defs ...` and `acc.known` build deep thunk chains that cascade-
+  # force on unwind and blow the C++ call stack. This forces the fields we
+  # actually thread through so each step is fully evaluated before the next.
+  foldWalk =
+    f: init: list:
+    builtins.foldl' (
+      acc: x:
+      let
+        res = f acc x;
+      in
+      builtins.seq res.defs (
+        builtins.seq res.pending (
+          builtins.seq res.known.counter (
+            if res ? elements then
+              builtins.seq res.elements res
+            else if res ? entries then
+              builtins.seq res.entries res
+            else if res ? args then
+              builtins.seq res.args res
+            else if res ? parts then
+              builtins.seq res.parts res
+            else if res ? path then
+              builtins.seq res.path res
+            else if res ? bindings then
+              builtins.seq res.bindings res
+            else if res ? formals then
+              builtins.seq res.formals res
+            else
+              res
+          )
+        )
+      )
+    ) init list;
+
   # ── Merge helper ────────────────────────────────────────────────
-  # Merges two walk results, combining defs and keeping the later known.
-  mergeDefs = a: b: a // b;
+  # TODO maybe lower this at ir level to simplify backends
+  update = a: b: a // b;
 
   # ── Split defs by hoistability ──────────────────────────────────
   # Separates defs into { hoistable; local; }.
@@ -41,34 +77,33 @@ let
   # resolved) can safely propagate out of let/lambda scopes.
   # Local defs (from walkAST — may reference scope-bound variables by
   # name) must stay in their enclosing scope.
+  # ── Split defs by hoistability ──────────────────────────────────
   splitDefs =
     defs:
     let
       names = builtins.attrNames defs;
+
+      # Separate names into hoistable and local
+      hoistableNames = builtins.filter (name: defs.${name}._hoistable or false) names;
+      localNames = builtins.filter (name: !(defs.${name}._hoistable or false)) names;
+
+      # Build the attrsets flatly to avoid deep '//' Proxy chains in JS
+      hoistable = builtins.listToAttrs (
+        builtins.map (name: {
+          inherit name;
+          value = defs.${name};
+        }) hoistableNames
+      );
+      local = builtins.listToAttrs (
+        builtins.map (name: {
+          inherit name;
+          value = defs.${name};
+        }) localNames
+      );
     in
-    builtins.foldl'
-      (
-        acc: name:
-        if (defs.${name}._hoistable or false) then
-          {
-            hoistable = acc.hoistable // {
-              ${name} = defs.${name};
-            };
-            inherit (acc) local;
-          }
-        else
-          {
-            inherit (acc) hoistable;
-            local = acc.local // {
-              ${name} = defs.${name};
-            };
-          }
-      )
-      {
-        hoistable = { };
-        local = { };
-      }
-      names;
+    {
+      inherit hoistable local;
+    };
 
   # ── Runtime reify metadata for one hoisted definition ───────────
   # `ast` is the stripped AST of the lambda; `envIR` evaluates, at the point
@@ -126,7 +161,7 @@ let
     else
       let
         result =
-          builtins.foldl'
+          foldWalk
             (
               acc: f:
               if builtins.hasAttr "defaultExpr" f then
@@ -141,7 +176,7 @@ let
                       default = r.ir;
                     }
                   ];
-                  defs = mergeDefs acc.defs r.defs;
+                  defs = update acc.defs r.defs;
                   pending = acc.pending ++ r.pending;
                   known = r.known;
                 }
@@ -362,7 +397,7 @@ let
           depth = seen.depth + 1;
         };
         result =
-          builtins.foldl'
+          foldWalk
             (
               acc: elem:
               let
@@ -370,7 +405,7 @@ let
               in
               {
                 elements = acc.elements ++ [ r.ir ];
-                defs = mergeDefs acc.defs r.defs;
+                defs = update acc.defs r.defs;
                 pending = acc.pending ++ r.pending;
                 known = r.known;
               }
@@ -474,7 +509,7 @@ let
             };
           };
           result =
-            builtins.foldl'
+            foldWalk
               (
                 acc: name:
                 let
@@ -507,7 +542,7 @@ let
                       }
                     ]
                     ++ acc.entries;
-                    defs = mergeDefs acc.defs r.defs;
+                    defs = update acc.defs r.defs;
                     pending = acc.pending ++ r.pending;
                     known = r.known;
                   }
@@ -552,7 +587,7 @@ let
       else if ast._expr == "primopApp" then
         let
           argsResult =
-            builtins.foldl'
+            foldWalk
               (
                 acc: arg:
                 let
@@ -560,7 +595,7 @@ let
                 in
                 {
                   args = acc.args ++ [ r.ir ];
-                  defs = mergeDefs acc.defs r.defs;
+                  defs = update acc.defs r.defs;
                   pending = acc.pending ++ r.pending;
                   known = r.known;
                 }
@@ -685,7 +720,7 @@ let
                 };
 
                 envResult =
-                  builtins.foldl'
+                  foldWalk
                     (
                       acc: key:
                       let
@@ -708,7 +743,7 @@ let
                           entries = acc.entries // {
                             ${key} = r.ir;
                           };
-                          defs = mergeDefs acc.defs r.defs;
+                          defs = update acc.defs r.defs;
                           pending = acc.pending ++ r.pending;
                           known = r.known;
                         }
@@ -780,7 +815,7 @@ let
         name = nameAlloc.name;
         bodyResult = walkAST ast.value.body nameAlloc.known;
         paramsResult = walkParams ast.value.arguments bodyResult.known;
-        splitBody = splitDefs (mergeDefs bodyResult.defs paramsResult.defs);
+        splitBody = splitDefs (update bodyResult.defs paramsResult.defs);
       in
       {
         ir = ir.ref name;
@@ -826,7 +861,7 @@ let
     else if ast._expr == "concatString/addition" then
       let
         result =
-          builtins.foldl'
+          foldWalk
             (
               acc: operand:
               let
@@ -834,7 +869,7 @@ let
               in
               {
                 parts = acc.parts ++ [ r.ir ];
-                defs = mergeDefs acc.defs r.defs;
+                defs = update acc.defs r.defs;
                 pending = acc.pending ++ r.pending;
                 known = r.known;
               }
@@ -856,7 +891,7 @@ let
       let
         funcResult = walkAST ast.value.function known;
         argsResult =
-          builtins.foldl'
+          foldWalk
             (
               acc: arg:
               let
@@ -864,7 +899,7 @@ let
               in
               {
                 args = acc.args ++ [ r.ir ];
-                defs = mergeDefs acc.defs r.defs;
+                defs = update acc.defs r.defs;
                 pending = acc.pending ++ r.pending;
                 known = r.known;
               }
@@ -892,7 +927,7 @@ let
       in
       {
         ir = ir.if_ condR.ir thenR.ir elseR.ir;
-        defs = mergeDefs (mergeDefs condR.defs thenR.defs) elseR.defs;
+        defs = update (update condR.defs thenR.defs) elseR.defs;
         pending = condR.pending ++ thenR.pending ++ elseR.pending;
         known = elseR.known;
       }
@@ -913,7 +948,7 @@ let
       in
       {
         ir = ir.and_ aR.ir bR.ir;
-        defs = mergeDefs aR.defs bR.defs;
+        defs = update aR.defs bR.defs;
         pending = aR.pending ++ bR.pending;
         known = bR.known;
       }
@@ -925,7 +960,7 @@ let
       in
       {
         ir = ir.or_ aR.ir bR.ir;
-        defs = mergeDefs aR.defs bR.defs;
+        defs = update aR.defs bR.defs;
         pending = aR.pending ++ bR.pending;
         known = bR.known;
       }
@@ -937,7 +972,7 @@ let
       in
       {
         ir = ir.implies aR.ir bR.ir;
-        defs = mergeDefs aR.defs bR.defs;
+        defs = update aR.defs bR.defs;
         pending = aR.pending ++ bR.pending;
         known = bR.known;
       }
@@ -949,7 +984,7 @@ let
       let
         exprR = walkAST ast.value.expression known;
         pathR =
-          builtins.foldl'
+          foldWalk
             (
               acc: p:
               let
@@ -957,7 +992,7 @@ let
               in
               {
                 path = acc.path ++ [ r.ir ];
-                defs = mergeDefs acc.defs r.defs;
+                defs = update acc.defs r.defs;
                 pending = acc.pending ++ r.pending;
                 known = r.known;
               }
@@ -1000,7 +1035,7 @@ let
       in
       {
         ir = ir.eq aR.ir bR.ir;
-        defs = mergeDefs aR.defs bR.defs;
+        defs = update aR.defs bR.defs;
         pending = aR.pending ++ bR.pending;
         known = bR.known;
       }
@@ -1012,7 +1047,7 @@ let
       in
       {
         ir = ir.neq aR.ir bR.ir;
-        defs = mergeDefs aR.defs bR.defs;
+        defs = update aR.defs bR.defs;
         pending = aR.pending ++ bR.pending;
         known = bR.known;
       }
@@ -1024,7 +1059,7 @@ let
       in
       {
         ir = ir.update baseR.ir extR.ir;
-        defs = mergeDefs baseR.defs extR.defs;
+        defs = update baseR.defs extR.defs;
         pending = baseR.pending ++ extR.pending;
         known = extR.known;
       }
@@ -1036,7 +1071,7 @@ let
       in
       {
         ir = ir.concatLists aR.ir bR.ir;
-        defs = mergeDefs aR.defs bR.defs;
+        defs = update aR.defs bR.defs;
         pending = aR.pending ++ bR.pending;
         known = bR.known;
       }
@@ -1055,7 +1090,7 @@ let
     else if ast._expr == "list" then
       let
         result =
-          builtins.foldl'
+          foldWalk
             (
               acc: elem:
               let
@@ -1063,7 +1098,7 @@ let
               in
               {
                 elements = acc.elements ++ [ r.ir ];
-                defs = mergeDefs acc.defs r.defs;
+                defs = update acc.defs r.defs;
                 pending = acc.pending ++ r.pending;
                 known = r.known;
               }
@@ -1086,17 +1121,17 @@ let
         # ── Walk static attrs ──────────────────────────────────────
         names = builtins.attrNames ast.value.attrs;
         staticResult =
-          builtins.foldl'
+          foldWalk
             (
               acc: name:
               let
                 r = walkAST ast.value.attrs.${name} acc.known;
               in
               {
-                entries = acc.entries // {
+                entries = update acc.entries {
                   ${name} = r.ir;
                 };
-                defs = mergeDefs acc.defs r.defs;
+                defs = update acc.defs r.defs;
                 pending = acc.pending ++ r.pending;
                 known = r.known;
               }
@@ -1115,8 +1150,9 @@ let
         # (e.g. `{ ${null} = 1; }` yields `{}`), so each entry is
         # wrapped in `if name != null then listToAttrs [...] else {}`.
         hasDynamic = ast.value.dynamicAttrs != [ ];
+        hasStatic = pairs != [ ];
         dynamicResult =
-          builtins.foldl'
+          foldWalk
             (
               acc: dyn:
               let
@@ -1135,7 +1171,7 @@ let
               in
               {
                 parts = acc.parts ++ [ guarded ];
-                defs = mergeDefs (mergeDefs acc.defs nameR.defs) valueR.defs;
+                defs = update (update acc.defs nameR.defs) valueR.defs;
                 pending = acc.pending ++ nameR.pending ++ valueR.pending;
                 known = valueR.known;
               }
@@ -1152,7 +1188,6 @@ let
         dynamicIR = builtins.foldl' ir.update (builtins.head dynamicResult.parts) (
           builtins.tail dynamicResult.parts
         );
-        hasStatic = names != [ ];
       in
       if ast.value.recursive then
         # Recursive attrsets: entries can reference each other by name.
@@ -1162,10 +1197,10 @@ let
         # All defs stay local (they may reference entry-bound variables).
         let
           refs = builtins.listToAttrs (
-            builtins.map (name: {
-              inherit name;
-              value = ir.var name;
-            }) names
+            builtins.map (e: {
+              name = e.name;
+              value = ir.var e.name;
+            }) pairs
           );
           staticBody = ir.attrs refs;
           body = if hasDynamic then ir.update staticBody dynamicIR else staticBody;
@@ -1238,7 +1273,7 @@ let
         let
           exprR = walkAST ast.value.expression known;
           pathR =
-            builtins.foldl'
+            foldWalk
               (
                 acc: p:
                 let
@@ -1246,7 +1281,7 @@ let
                 in
                 {
                   path = acc.path ++ [ r.ir ];
-                  defs = mergeDefs acc.defs r.defs;
+                  defs = update acc.defs r.defs;
                   pending = acc.pending ++ r.pending;
                   known = r.known;
                 }
@@ -1271,7 +1306,7 @@ let
                 known = pathR.known;
               };
 
-          allDefs = mergeDefs pathR.defs defaultR.defs;
+          allDefs = update pathR.defs defaultR.defs;
           allPending = pathR.pending ++ defaultR.pending;
         in
         {
@@ -1293,7 +1328,7 @@ let
     else if ast._expr == "primopApp" then
       let
         argsResult =
-          builtins.foldl'
+          foldWalk
             (
               acc: arg:
               let
@@ -1301,7 +1336,7 @@ let
               in
               {
                 args = acc.args ++ [ r.ir ];
-                defs = mergeDefs acc.defs r.defs;
+                defs = update acc.defs r.defs;
                 pending = acc.pending ++ r.pending;
                 known = r.known;
               }
@@ -1342,17 +1377,17 @@ let
         attrs = ast.value.attrs.value.attrs;
         names = builtins.attrNames attrs;
         bindingsResult =
-          builtins.foldl'
+          foldWalk
             (
               acc: name:
               let
                 r = walkAST attrs.${name} acc.known;
               in
               {
-                bindings = acc.bindings // {
+                bindings = update acc.bindings {
                   ${name} = r.ir;
                 };
-                defs = mergeDefs acc.defs r.defs;
+                defs = update acc.defs r.defs;
                 pending = acc.pending ++ r.pending;
                 known = r.known;
               }
@@ -1365,7 +1400,7 @@ let
             }
             names;
         bodyResult = walkAST ast.value.body bindingsResult.known;
-        allDefs = mergeDefs bindingsResult.defs bodyResult.defs;
+        allDefs = update bindingsResult.defs bodyResult.defs;
         allPending = bindingsResult.pending ++ bodyResult.pending;
         split = splitDefs allDefs;
       in
@@ -1396,7 +1431,7 @@ let
         ir = ir.if_ condR.ir bodyR.ir (
           ir.primopApp "throw" [ (ir.string "wechselbalg: assertion failed") ]
         );
-        defs = mergeDefs condR.defs bodyR.defs;
+        defs = update condR.defs bodyR.defs;
         pending = condR.pending ++ bodyR.pending;
         known = bodyR.known;
       }
@@ -1445,7 +1480,7 @@ let
 
       bodyResult = walkAST ast.value.body known';
       paramsResult = walkParams ast.value.arguments bodyResult.known;
-      splitBody = splitDefs (mergeDefs bodyResult.defs paramsResult.defs);
+      splitBody = splitDefs (update bodyResult.defs paramsResult.defs);
 
       innerDef = ir.funcDef (paramsResult.params // reifyMeta ast known') bodyResult.ir splitBody.local;
 
@@ -1513,14 +1548,28 @@ let
               inherit (item) name value key;
               inherit (state) known;
             };
+
+            newDefs = update state.defs compiled.def;
+            newQueue = restQueue ++ (compiled.pending or [ ]);
           in
-          {
-            inherit (state) ir;
-            defs = mergeDefs state.defs compiled.def;
-            known = compiled.known;
-            # Push newly discovered items onto the queue
-            queue = restQueue ++ (compiled.pending or [ ]);
-          }
+          builtins.seq newDefs (
+            builtins.seq compiled.known.counter (
+              if newQueue == [ ] then
+                builtins.seq newQueue state
+                // {
+                  defs = newDefs;
+                  known = compiled.known;
+                  queue = [ ];
+                }
+              else
+                {
+                  inherit (state) ir;
+                  defs = newDefs;
+                  known = compiled.known;
+                  queue = newQueue;
+                }
+            )
+          )
       ) initialState fuel;
 
       bindings = finalState.known.bindings;

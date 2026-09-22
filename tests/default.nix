@@ -637,15 +637,22 @@ let
             "echo 'FAIL: ${escapeForBash r.desc}'; echo '  Expected: ${expStr}'; echo '  Got:      ${gotStr}'"
           ) failed;
           summary = "${toString (builtins.length passed)} passed, ${toString (builtins.length failed)} failed, ${toString (builtins.length results)} total";
+          script = pkgs.writeText "wechselbalg-tests-nix.sh" (
+            ''
+              echo "=== Running wechselbalg tests (${name}) ==="
+            ''
+            + lib.concatStringsSep "\n" passLines
+            + lib.concatStringsSep "\n" failLines
+            + ''
+
+              echo "${summary}"
+            ''
+            + (if (builtins.length failed) > 0 then "exit 1" else "")
+          );
         in
         {
           buildPhase = ''
-            echo "=== Running wechselbalg tests (${name}) ==="
-            ${lib.concatStringsSep "\n" passLines}
-            ${lib.concatStringsSep "\n" failLines}
-            echo ""
-            echo "${summary}"
-            ${if (builtins.length failed) > 0 then "exit 1" else ""}
+            bash ${script}
           '';
           inherit buildInputs;
         };

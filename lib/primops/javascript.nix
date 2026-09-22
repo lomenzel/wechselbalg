@@ -75,7 +75,7 @@
     }))
   '';
 
-  seq = "Value.lambda(a => Value.lambda(b => b))";
+  seq = "Value.lambda(a => Value.lambda(b => { Value._forceDeep(a); return b; }))";
   deepSeq = "Value.lambda(a => Value.lambda(b => { a.toJSON_(); return b; }))";
 
   substring = ''
