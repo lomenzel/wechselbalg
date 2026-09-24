@@ -7,7 +7,6 @@
 # Nix value that can be lowered to an IR literal.
 # If success == false, the node must be translated structurally by the walker.
 #
-# Adapted from gestalt's eval.nix — made standalone (no module system).
 
 let
   hasPrefix = prefix: str: builtins.substring 0 (builtins.stringLength prefix) str == prefix;

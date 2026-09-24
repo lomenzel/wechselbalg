@@ -1,19 +1,12 @@
 # Wechselbalg
 
-Wechselbalg translates Nix values (including functions and lambdas) into
-portable code for multiple targets: JavaScript, TypeScript, C++, Python, Kotlin, and Nix.
+Wechselbalg translates Nix values (including lambdas) into
+portable code for multiple targets: JavaScript, TypeScript, C++, Python, Kotlin, Rust and Nix.
 
 The project performs a single-pass traversal over Nix values to produce an
 intermediate representation (IR), which is then rendered by target-specific
 backends. Wechselbalg attempts to preserve essential Nix semantics, so the
 generated code behaves similarly to the original value whenever possible.
-
-## Warning
-
-This project is an early work in progress. The codebase began as an
-AI-generated rewrite of parts from [gestalt](https://rad.menzel.lol/nodes/rad-node.menzel.lol/rad:zC4kuEr7XGt6qAcTt5JtJ7pCxZE8).
-Although much has been modified since that initial generation, large parts
-may still be rough, incomplete, or contain issues. Use at your own risk.
 
 ## Usage
 
@@ -23,22 +16,21 @@ The fork only exposes them with the experimental feature `ast-introspection`
 enabled, e.g.:
 
 ```sh
-nix run github:lomenzel/nix -- --extra-experimental-features ast-introspection flake check
+nix run github:lomenzel/nix -- --extra-experimental-features ast-introspection build .#my-cool-project-that-uses-wechselbalg
 ```
-
-In the dev shell (`nix develop`) the wrapped `nix` passes this flag for you.
 
 An overlay (`overlays.default`) adds helper functions to `lib`. The primary
 translators are:
 
-- `toNix` — serialize Nix values to Nix source code (no runtime required)
-- `toCpp` — translate Nix values to C++ (requires C++ runtime)
-- `toJS` — translate Nix values to JavaScript (requires JS runtime)
-- `toTS` — translate Nix values to TypeScript (requires TS runtime)
-- `toPython` — translate Nix values to Python (requires Python runtime)
-- `toKotlin` — translate Nix values to Kotlin (requires Kotlin runtime)
+- `toNix`
+- `toCpp`
+- `toRust`
+- `toJS`
+- `toTS`
+- `toPython`
+- `toKotlin`
 
-All non-Nix targets require a small runtime `Value` class (which handles
+All non-Nix targets require a `Value` class (which handles
 laziness and helper functions). Runtime snippets are available as:
 
 - `lib.cppRuntime`
@@ -47,7 +39,7 @@ laziness and helper functions). Runtime snippets are available as:
 - `lib.pythonRuntime`
 - `lib.kotlinRuntime`
 
-Example (embedding the JavaScript runtime from Nix):
+Example:
 
 ```nix
 pkgs.writeText "fun.js" ''
@@ -65,16 +57,12 @@ pkgs.writeText "fun.js" ''
 ''
 ```
 
-Python and C++ work similarly using `lib.pythonRuntime` and `lib.cppRuntime`.
+Other languages work similarly using `lib.pythonRuntime` and `lib.cppRuntime` etc..
 
 ### C++ library mode
 
 For large values, the single-TU output of `lib.toCpp value` may be too
-large for the C++ compiler to handle efficiently. `lib.toCpp` is also a
-functor: calling it with an options attrset returns a library spec whose
-`mkDerivation` produces a static library and matching public header.
-Each hoisted function ends up in its own translation unit so compilation
-is parallelisable and individual TUs stay small.
+large for the C++ compiler to handle efficiently. To solve this there is `lib.mkCppLibrary`
 
 ```nix
 let
@@ -116,19 +104,16 @@ Generating Nix is simpler and does not require a runtime:
 
 ```nix
 # Serializing a function to a Nix string
-builtins.trace (lib.toNix (x: x + 1)) "trace"
+string = lib.toNix (x: x + 1);
 ```
+## Limitations
 
-## Current status
+- Infinite attribute sets: i have not yet found a way to detect infinitly recursive attr sets. They are translated to a depth of 500. Any runtime access deeper than that will throw. Generating them at runtime should work tho.
+- Performance: as allready mentioned compiling large values with gcc causes problems. but translation and runtime are not perfect by any means. running complex things with compiled code quickly creates stack overflows or needs a long time to finish.
+- Paths: Paths are completely unsupported. they can be translated but accessing them at runtime throws
+- Partial Primop implementation: Not every primop is implemented in every language. especially the ones operating on paths. Unknown primops translate to a runtime throw.
+- translated tryEval catches every error. even stack overflows. this is intentional but a difference to the real nix
 
-Basic language features are supported (see the test cases in `./tests`), but
-the implementation is incomplete: many primitive operations are
-unimplemented, and support for Nix paths and derivations is not available
-(and is not planned).
-
-Performance is currently poor: code generation and generated code can be
-slow. For example, the C++ translation of `lib.evalModules` may take hours
-to compile and can require increasing the stack size to evaluate.
 
 ## Development
 

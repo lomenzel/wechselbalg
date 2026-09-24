@@ -1,7 +1,7 @@
 # Syntactic analysis of reified lambda ASTs.
 #
 # This module is the *single source of truth* for two things that must never
-# disagree (invariant I1 / I5 in docs/closure-conversion.md):
+# disagree:
 #
 #   1. `key`     — the identity of a code template. Two lambdas with the same
 #                  key compile to the same body and may share one definition.

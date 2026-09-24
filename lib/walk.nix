@@ -330,7 +330,6 @@ let
     value: known: seen:
     let
       type = builtins.typeOf value;
-      _ = if type == "path" then true else purity.assertPure value;
     in
 
     if seen.depth > 500 then
