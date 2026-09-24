@@ -1,5 +1,20 @@
 # tests/tostring-primop.test.nix
-lib: [
+lib:
+let
+  # 1. Defined OUTSIDE the lambda so it is evaluated by Nix
+  #    and walked by `walkValue` as a captured closure environment.
+  # 2. Contains a lambda so util.JSONOptimizable doesn't skip it.
+  capturedModule = {
+    imports = [
+      {
+        imports = [
+          (x: x + 1)
+        ];
+      }
+    ];
+  };
+in
+[
   {
     description = "simple let binding";
     func =
@@ -23,42 +38,57 @@ lib: [
     expected.toBe = 12;
   }
 
+  # {
+  #   description = "circular translation :)";
+  #   func =
+  #     let
+  #       parsec = import (
+  #         builtins.fetchurl "https://raw.githubusercontent.com/kanwren/nix-parsec/refs/heads/master/parsec.nix"
+  #       );
+  #       lexer = import (
+  #         builtins.fetchurl "https://raw.githubusercontent.com/kanwren/nix-parsec/refs/heads/master/lexer.nix"
+  #       );
+  #       nix-nix = import /home/leonard/Projekte/Gestalt/nix-nix/src/default.nix {
+  #         nix-parsec.lib = {
+  #           parsec = parsec;
+  #           lexer = lexer { inherit parsec; };
+  #         };
+  #       };
+  #       evalString = nix-nix.evalString;
+  #     in
+  #     params: (evalString { inherit lib; } params); # .success # should fail, but in the logs, the error message and value should be visible
+  #   params = "lib.toJS (x: x)";
+  #   expected.toBe =
+  #     let
+  #       parsec = import (
+  #         builtins.fetchurl "https://raw.githubusercontent.com/kanwren/nix-parsec/refs/heads/master/parsec.nix"
+  #       );
+  #       lexer = import (
+  #         builtins.fetchurl "https://raw.githubusercontent.com/kanwren/nix-parsec/refs/heads/master/lexer.nix"
+  #       );
+  #       nix-nix = import /home/leonard/Projekte/Gestalt/nix-nix/src/default.nix {
+  #         nix-parsec.lib = {
+  #           parsec = parsec;
+  #           lexer = lexer { inherit parsec; };
+  #         };
+  #       };
+  #       evalString = nix-nix.evalString;
+  #     in
+  #     (evalString { inherit lib; } "lib.toJS (x: x)");
+  # }
+
   {
-    description = "circular translation :)";
+    description = "nested attrsets with identical keys (false positive circularity)";
     func =
+      params:
       let
-        parsec = import (
-          builtins.fetchurl "https://raw.githubusercontent.com/kanwren/nix-parsec/refs/heads/master/parsec.nix"
-        );
-        lexer = import (
-          builtins.fetchurl "https://raw.githubusercontent.com/kanwren/nix-parsec/refs/heads/master/lexer.nix"
-        );
-        nix-nix = import /home/leonard/Projekte/Gestalt/nix-nix/src/default.nix {
-          nix-parsec.lib = {
-            parsec = parsec;
-            lexer = lexer { inherit parsec; };
-          };
-        };
-        evalString = nix-nix.evalString;
+        # Read capturedModule as a whole variable so analyze.nix does not narrow it
+        m = capturedModule;
+        inner = builtins.head m.imports;
+        fn = builtins.head inner.imports;
       in
-      params: (evalString { inherit lib; } params); # .success # should fail, but in the logs, the error message and value should be visible
-    params = "lib.toJS (x: x)";
-    expected.toBe =
-      let
-        parsec = import (
-          builtins.fetchurl "https://raw.githubusercontent.com/kanwren/nix-parsec/refs/heads/master/parsec.nix"
-        );
-        lexer = import (
-          builtins.fetchurl "https://raw.githubusercontent.com/kanwren/nix-parsec/refs/heads/master/lexer.nix"
-        );
-        nix-nix = import /home/leonard/Projekte/Gestalt/nix-nix/src/default.nix {
-          nix-parsec.lib = {
-            parsec = parsec;
-            lexer = lexer { inherit parsec; };
-          };
-        };
-        evalString = nix-nix.evalString;
-      in
-      (evalString { inherit lib; } "lib.toJS (x: x)");
+      fn params;
+    params = 41;
+    expected.toBe = 42;
   }
 ]

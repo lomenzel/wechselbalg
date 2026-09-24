@@ -206,13 +206,63 @@ let
       }
 
     else if _expr == "call" then
-      # Don't try to eagerly evaluate function calls — they may abort/throw
-      # in ways that tryEval can't catch.  Let the walker handle them structurally.
-      {
-        success = false;
-        value = null;
-      }
+      let
+        fnNode = value.function;
+        args = value.args or [ ];
 
+        # Safely extract variable names: { _expr = "var"; value = { name = "..."; }; }
+        varName =
+          node:
+          if node ? value && builtins.isAttrs node.value && node.value ? name then
+            node.value.name
+          else if node ? value && builtins.isString node.value then
+            node.value
+          else
+            "";
+
+        isImportFn =
+          # 1. Bare `import` or `scopedImport`
+          (fnNode._expr or null == "var" && (varName fnNode == "import" || varName fnNode == "scopedImport"))
+          # 2. `builtins.import`
+          || (
+            fnNode._expr or null == "select"
+            && (fnNode.value.expression._expr or null) == "var"
+            && varName fnNode.value.expression == "builtins"
+            && builtins.length fnNode.value.path == 1
+            && (
+              let
+                p = eval (builtins.elemAt fnNode.value.path 0);
+              in
+              p.success && p.value == "import"
+            )
+          );
+      in
+      # Only handle single-argument calls to import
+      if isImportFn && builtins.length args == 1 then
+        let
+          argEval = eval (builtins.head args);
+        in
+        if argEval.success && (builtins.isPath argEval.value || builtins.isString argEval.value) then
+          let
+            imported = builtins.tryEval (import argEval.value);
+          in
+          if imported.success then
+            {
+              success = true;
+              value = imported.value;
+            }
+          else
+            throw "wechselbalg eval: failed to import '${toString argEval.value}'"
+        else
+          {
+            success = false;
+            value = null;
+          }
+      else
+        {
+          success = false;
+          value = null;
+        }
     else if _expr == "update" then
       let
         baseEval = eval value.e1;
@@ -326,8 +376,8 @@ let
     else if _expr == "path" then
       # Paths are impure — we cannot evaluate them at compile time in wechselbalg
       {
-        success = false;
-        value = null;
+        success = true;
+        inherit value;
       }
 
     else if _expr == "hasAttr" then

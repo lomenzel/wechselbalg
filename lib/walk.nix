@@ -465,36 +465,12 @@ let
         confirmed = if ancestor == null then false else confirmSameSet value ancestor.value;
       in
       if ancestor != null && confirmed == true then
-        # Genuine cycle: refer to the shared binding that is being built.
+        # Genuine cycle confirmed by sameFunction: refer to the shared binding.
         {
           ir = ir.ref ancestor.binding;
           defs = { };
           pending = [ ];
           known = markUsed ancestor.binding known;
-        }
-      else if ancestor != null && confirmed == null then
-        # Fingerprints match but nothing comparable — keep the historical
-        # behaviour and fail loudly at runtime rather than share a wrong value.
-        {
-          ir =
-            ir.let_
-              {
-                __wb_circ_err = ir.primopApp "throw" [
-                  (ir.string "wechselbalg: circular attrset (keys: ${fingerprint})")
-                ];
-              }
-              (ir.attrs (
-                builtins.listToAttrs (
-                  builtins.map (name: {
-                    inherit name;
-                    value = ir.var "__wb_circ_err";
-                  }) names
-                )
-              ))
-              { };
-          defs = { };
-          pending = [ ];
-          inherit known;
         }
       else
         let
@@ -837,7 +813,7 @@ let
               known._env;
           mode =
             env.capture.mode.${ast.value.name}
-              or (throw "wechselbalg: internal: free variable '${ast.value.name}' is missing from the capture plan");
+              or (throw "wechselbalg: internal: free variable '${ast.value.name}' is missing from the capture plan; node=${builtins.toJSON ast.value} envKeys=${builtins.toString (builtins.attrNames env.capture.mode)}");
         in
         # Invariant I2: the capture plan decided this root is read whole, so a
         # bare read must be exactly what the instantiation site captured.

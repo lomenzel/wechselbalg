@@ -76,8 +76,24 @@
   '';
 
   seq = "Value.lambda(a => Value.lambda(b => { Value._forceDeep(a); return b; }))";
-  deepSeq = "Value.lambda(a => Value.lambda(b => { a.toJSON_(); return b; }))";
-
+  deepSeq = ''
+    Value.lambda(a => Value.lambda(b => {
+      const seen = new Set();
+      function force(v) {
+        const val = Value._forceDeep(v);
+        if (!val || seen.has(val)) return;
+        seen.add(val);
+        if (val.isList()) {
+          for (const elem of val.asList()) force(elem);
+        } else if (val.isAttrs()) {
+          const s = val.asSet();
+          for (const k of Object.keys(s)) force(s[k]);
+        }
+      }
+      force(a);
+      return b;
+    }))
+  '';
   substring = ''
     Value.lambda(start => Value.lambda(len => Value.lambda(str => {
       const s = str.asString();
