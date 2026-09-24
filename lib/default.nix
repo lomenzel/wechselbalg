@@ -4,7 +4,8 @@
 #   let wb = wechselbalg.lib; in
 #   wb.toJS (x: x + 1)
 #   wb.toCpp { a = 1; b = "hello"; }
-#   wb.translate { lang = "javascript"; value = someFunc; }
+#   wb.toRust (x: x + 1)
+#   wb.translate { lang = "rust"; value = someFunc; }
 #
 # This file is the single entry-point. It wires together the walker,
 # renderer, and backends.
@@ -12,13 +13,15 @@ let
   walk = import ./walk.nix;
   renderer = import ./render.nix;
 
-  backends = {
+  backends = rec {
     javascript = import ./backends/javascript.nix;
     typescript = import ./backends/typescript.nix;
     cpp = import ./backends/cpp.nix;
     python = import ./backends/python.nix;
     kotlin = import ./backends/kotlin.nix;
     nix = import ./backends/nix.nix;
+    rust = import ./backends/rust.nix;
+    rs = rust; # convenience alias
   };
 
   # Core translate: walk the value, then render with the chosen backend.
@@ -243,6 +246,13 @@ let
       lang = "nix";
       inherit value;
     };
+  toRust =
+    value:
+    translate {
+      lang = "rust";
+      inherit value;
+    };
+  toRS = toRust; # alias
 in
 {
   inherit
@@ -253,12 +263,17 @@ in
     toPython
     toKotlin
     toNix
+    toRust
+    toRS
     mkCppLibrary
     ;
 
   # The C++ Value type header — users include this in their project.
   # Usage: builtins.toFile "wechselbalg.hpp" lib.cppRuntime
   cppRuntime = builtins.readFile ./runtime/cpp/value.hpp;
+
+  # The Rust Value runtime type.
+  rustRuntime = builtins.readFile ./runtime/rust/value.rs;
 
   # The JS Value class — users include this before using toJS output.
   # Usage: write to file, <script src="value.js"> before generated code.

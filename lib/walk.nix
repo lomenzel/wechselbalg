@@ -1560,15 +1560,25 @@ let
         ir = rootIR;
       };
 
-      report = ''
+      report =
+        let
+          numTemplates = toString (builtins.length (builtins.attrNames finalState.known.templates));
+          numDefs = toString (builtins.length (builtins.attrNames finalState.defs));
+          numShared = toString (builtins.length (builtins.attrNames bindings));
+          numAllocated = toString finalState.known.counter;
+        in
+        if finalState.known.counter < 100 then
+          "[Telemetry] templates: ${numTemplates}, defs: ${numDefs}, shared: ${numShared}, names: ${numAllocated}"
+        else
+          ''
 
-        ═════════════ Wechselbalg Template Telemetry ═════════════
-        Code templates   : ${toString (builtins.length (builtins.attrNames finalState.known.templates))}
-        Hoisted defs     : ${toString (builtins.length (builtins.attrNames finalState.defs))}
-        Shared bindings  : ${toString (builtins.length (builtins.attrNames bindings))}
-        Names allocated  : ${toString finalState.known.counter}
-        ══════════════════════════════════════════════════════════
-      '';
+            ═════════════ Wechselbalg Template Telemetry ═════════════
+            Code templates   : ${numTemplates}
+            Hoisted defs     : ${numDefs}
+            Shared bindings  : ${numShared}
+            Names allocated  : ${numAllocated}
+            ══════════════════════════════════════════════════════════
+          '';
 
       # Invariant I4: every ref/var resolves. Catches dangling hoisted
       # definitions, which otherwise only surface as runtime errors in the
