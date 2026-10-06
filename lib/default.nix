@@ -291,6 +291,10 @@ in
   # Usage: write to file or compile together with generated code.
   kotlinRuntime = builtins.readFile ./runtime/kotlin/Value.kt;
 
+  wasm = let 
+    __wasm = a: b: throw "You need to use wechselbalg to translate to JS or TS to use the lib.wasm function. there currently are no implementations for other languages";
+  in args: input: __wasm args input;
+
   # Escape hatches for advanced users
   inherit walk;
   inherit backends;

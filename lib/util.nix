@@ -18,19 +18,33 @@ let
       canEvaluate = builtins.tryEval value;
     in
     if !canEvaluate.success then
-      #builtins.trace "optimize-json: value cannot be evaluated at build time"
       false
     else if depth > 100 then
-      #builtins.trace "optimize-json: depth too high, maybe cyclic data structure"
       false
     else if
       type == "null" || type == "string" || type == "int" || type == "bool" || type == "float"
     then
       true
     else if type == "list" then
-      builtins.all (JSONOptimizable (depth + 1)) value
+      builtins.all (
+        elem:
+        let
+          try = builtins.tryEval elem;
+        in
+        try.success && JSONOptimizable (depth + 1) try.value
+      ) value
     else if type == "set" then
-      builtins.all (JSONOptimizable (depth + 1)) (builtins.attrValues value)
+      let
+        names = builtins.attrNames value;
+        # Safely evaluate each attribute with tryEval so throwing/deprecated attributes don't crash
+        checkAttr =
+          name:
+          let
+            try = builtins.tryEval value.${name};
+          in
+          try.success && JSONOptimizable (depth + 1) try.value;
+      in
+      builtins.all checkAttr names
     else if type == "path" || type == "lambda" then
       false
     else

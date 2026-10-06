@@ -237,7 +237,8 @@ let
           );
       in
       # Only handle single-argument calls to import
-      if isImportFn && builtins.length args == 1 then
+
+      if isImportFn && builtins.length args >= 1 then
         let
           argEval = eval (builtins.head args);
         in
@@ -245,13 +246,22 @@ let
           let
             imported = builtins.tryEval (import argEval.value);
           in
-          if imported.success then
+          if !imported.success then
+            throw "wechselbalg eval: failed to import '${toString argEval.value}'"
+          else if builtins.length args == 1 then
             {
               success = true;
               value = imported.value;
             }
           else
-            throw "wechselbalg eval: failed to import '${toString argEval.value}'"
+            # Applied to further arguments that may contain free variables:
+            # cannot fold, but the imported function is known statically.
+            {
+              success = false;
+              value = null;
+              importedFn = imported.value;
+              restArgs = builtins.tail args;
+            }
         else
           {
             success = false;

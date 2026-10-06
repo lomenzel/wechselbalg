@@ -98,7 +98,15 @@ let
       }
 
     else if e == "var" then
-      if builtins.hasAttr "closureEnvValue" v then
+      if v.name == "__wasm" then
+        {
+          stripped = {
+            _expr = "primop";
+            value = "wasm";
+          };
+          uses = [ ];
+        }
+      else if builtins.hasAttr "closureEnvValue" v then
         {
           stripped = {
             _expr = "var";
@@ -523,7 +531,15 @@ let
       }
 
     else if e == "var" then
-      if bound ? ${v.name} then
+      if v.name == "__wasm" then
+        {
+          stripped = {
+            _expr = "primop";
+            value = "wasm";
+          };
+          free = [ ];
+        }
+      else if bound ? ${v.name} then
         {
           stripped = {
             _expr = "var";

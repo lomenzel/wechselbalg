@@ -14,6 +14,7 @@
 # }
 let
   ir = import ./ir.nix;
+  validate = import ./validate.nix;
 
   # ── Collect all primop names referenced in IR trees ─────────
   # Walks an IR node recursively; returns a flat list of primop name strings.
@@ -280,14 +281,109 @@ let
     in
     backend.renderFuncDef name params (renderNode backend def.body) renderedLocalDefs localDefNames;
 
+  # ── Dead Code Elimination: Reachability from rootIR ──────────
+  # Collect all `ref` and `var` identifiers referenced in an IR node
+  collectRefs =
+    node:
+    if node._t == "ref" || node._t == "var" then
+      [ node.name ]
+    else if node._t == "list" then
+      builtins.concatMap collectRefs node.elements
+    else if node._t == "attrs" then
+      builtins.concatMap (n: collectRefs node.entries.${n}) (builtins.attrNames node.entries)
+    else if node._t == "apply" then
+      collectRefs node.fn ++ collectRefs node.arg
+    else if node._t == "closure" then
+      [ node.template ] ++ builtins.concatMap (n: collectRefs node.env.${n}) (builtins.attrNames node.env)
+    else if node._t == "if" then
+      collectRefs node.cond ++ collectRefs node.then_ ++ collectRefs node.else_
+    else if
+      node._t == "eq" || node._t == "add" || node._t == "lessThan" || node._t == "concatLists"
+    then
+      collectRefs node.a ++ collectRefs node.b
+    else if node._t == "update" then
+      collectRefs node.base ++ collectRefs node.ext
+    else if node._t == "select" then
+      collectRefs node.expr
+      ++ builtins.concatMap collectRefs node.path
+      ++ (if node.default != null then collectRefs node.default else [ ])
+    else if node._t == "let" then
+      builtins.concatMap (n: collectRefs node.bindings.${n}) (builtins.attrNames node.bindings)
+      ++ collectRefs node.body
+      ++ builtins.concatMap (n: collectDefRefs node.localDefs.${n}) (builtins.attrNames (node.localDefs or { }))
+    else
+      [ ];
+
+  # Collect all references in a function definition (including params, body, and localDefs)
+  collectDefRefs =
+    def:
+    let
+      fromFormals =
+        if def.params.formals or null != null then
+          builtins.concatMap (
+            f: if f.hasDefault or false then collectRefs f.default else [ ]
+          ) def.params.formals
+        else
+          [ ];
+      fromEnv =
+        if def.params.envIR or null != null then
+          collectRefs def.params.envIR
+        else
+          [ ];
+      fromLocalDefs =
+        builtins.concatMap (n: collectDefRefs def.localDefs.${n}) (builtins.attrNames (def.localDefs or { }));
+    in
+    fromFormals ++ fromEnv ++ collectRefs def.body ++ fromLocalDefs;
+
+  # Transitive closure of all reachable defs starting from rootIR
+  pruneDefs =
+    rootIR: allDefs:
+    let
+      bfs =
+        frontier: visited:
+        if frontier == [ ] then
+          visited
+        else
+          let
+            validNames = builtins.filter (n: !(visited ? ${n}) && (allDefs ? ${n})) frontier;
+            newVisited =
+              visited
+              // builtins.listToAttrs (
+                builtins.map (n: {
+                  name = n;
+                  value = true;
+                }) validNames
+              );
+            nextFrontier = builtins.concatMap (n: collectDefRefs allDefs.${n}) validNames;
+          in
+          if validNames == [ ] then visited else bfs nextFrontier newVisited;
+
+      reachableSet = bfs (collectRefs rootIR) { };
+    in
+    builtins.intersectAttrs reachableSet allDefs;
+
   # ── Main entry point ────────────────────────────────────────────
   # Takes a backend and a walk result { ir; defs; } and produces
   # ── Shared collection ──────────────────────────────────────────
   # Both `render` and `renderLibrary` share the same rendering of
   # bindings, defs, and expression; only the final assembly step differs.
   prepare =
-    backend: walkResult:
+    backend: walkResult':
     let
+      prunedDefs = pruneDefs walkResult'.ir walkResult'.defs;
+      walkResult = walkResult' // {
+        defs = prunedDefs;
+      };
+
+      validationErrors = validate.check walkResult;
+    in
+    if validationErrors != [ ] then
+      throw ''
+        wechselbalg render: dead code elimination produced dangling references (${toString (builtins.length validationErrors)} error(s)):
+          ${builtins.concatStringsSep "\n  " validationErrors}''
+    else
+      let
+
       usedPrimops = collectPrimops walkResult;
 
       stringDedup = buildStringDedup walkResult;

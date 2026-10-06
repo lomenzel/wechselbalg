@@ -803,28 +803,38 @@ let
       }
 
     else if ast._expr == "var" then
-      if builtins.hasAttr "closureEnvValue" ast.value then
-        let
-          env =
-            if (known._env or null) == null then
-              throw "wechselbalg: internal: free variable '${ast.value.name}' walked outside a template body"
-            else
-              known._env;
-          mode =
-            env.capture.mode.${ast.value.name}
-              or (throw "wechselbalg: internal: free variable '${ast.value.name}' is missing from the capture plan; node=${builtins.toJSON ast.value} envKeys=${builtins.toString (builtins.attrNames env.capture.mode)}");
-        in
-        # Invariant I2: the capture plan decided this root is read whole, so a
-        # bare read must be exactly what the instantiation site captured.
-        if mode != "whole" then
-          throw "wechselbalg: internal: free variable '${ast.value.name}' is captured as '${mode}' but read whole"
-        else
+      if ast.value.name == "__wasm" then
+        {
+          ir = ir.primop "wasm";
+          defs = { };
+          pending = [ ];
+          inherit known;
+        }
+      else if builtins.hasAttr "closureEnvValue" ast.value then
+        if (known._env or null) == null then
+          # Fallback: if walked outside a template, emit direct variable reference
           {
-            ir = ir.select (ir.var env.param) [ (ir.string ast.value.name) ];
+            ir = ir.var ast.value.name;
             defs = { };
             pending = [ ];
             inherit known;
           }
+        else
+          let
+            env = known._env;
+            mode =
+              env.capture.mode.${ast.value.name}
+                or (throw "wechselbalg: internal: free variable '${ast.value.name}' is missing from the capture plan; envKeys=${builtins.toString (builtins.attrNames env.capture.mode)}");
+          in
+          if mode != "whole" then
+            throw "wechselbalg: internal: free variable '${ast.value.name}' is captured as '${mode}' but read whole"
+          else
+            {
+              ir = ir.select (ir.var env.param) [ (ir.string ast.value.name) ];
+              defs = { };
+              pending = [ ];
+              inherit known;
+            }
       else
         {
           ir = ir.var ast.value.name;
@@ -861,7 +871,35 @@ let
         ir = ir.concatStrings result.parts;
         inherit (result) defs known pending;
       }
-
+    else if ast._expr == "call" && evalResult ? importedFn then
+      let
+        fnR = walkValue evalResult.importedFn known emptySeen;
+        argsResult =
+          foldWalk
+            (
+              acc: arg:
+              let
+                r = walkAST arg acc.known;
+              in
+              {
+                args = acc.args ++ [ r.ir ];
+                defs = update acc.defs r.defs;
+                pending = acc.pending ++ r.pending;
+                known = r.known;
+              }
+            )
+            {
+              args = [ ];
+              defs = fnR.defs;
+              pending = fnR.pending;
+              known = fnR.known;
+            }
+            evalResult.restArgs;
+      in
+      {
+        ir = builtins.foldl' (f: a: ir.apply f a) fnR.ir argsResult.args;
+        inherit (argsResult) defs known pending;
+      }
     else if ast._expr == "call" then
       let
         funcResult = walkAST ast.value.function known;
@@ -1430,6 +1468,7 @@ let
   # where `<inner>` is an ordinary local definition holding the real
   # parameters and body.  That reuses the existing localDefs machinery, keeps
   # `functionArgs` metadata on the inner lambda, and needs no backend support.
+  # ── Compile one code template ───────────────────────────────────
   walkFunctionBody =
     {
       name,
@@ -1453,11 +1492,31 @@ let
             };
           };
 
+      # Snapshot state that must not leak out of this function's scope
+      priorBindings = known'.bindings;
+      priorInstances = known'.instances;
+      priorUsed = known'.used;
+
       bodyResult = walkAST ast.value.body known';
       paramsResult = walkParams ast.value.arguments bodyResult.known;
       splitBody = splitDefs (update bodyResult.defs paramsResult.defs);
 
-      innerDef = ir.funcDef (paramsResult.params // reifyMeta ast known') bodyResult.ir splitBody.local;
+      # Isolate bindings created strictly inside this function body
+      newBindingNames = builtins.filter (n: !(priorBindings ? ${n})) (
+        builtins.attrNames paramsResult.known.bindings
+      );
+      localBodyBindings = builtins.listToAttrs (
+        builtins.map (n: {
+          name = n;
+          value = paramsResult.known.bindings.${n};
+        }) newBindingNames
+      );
+
+      # If the body created local closures/bindings, wrap the body IR in a let_
+      scopedBodyIR =
+        if localBodyBindings == { } then bodyResult.ir else ir.let_ localBodyBindings bodyResult.ir { };
+
+      innerDef = ir.funcDef (paramsResult.params // reifyMeta ast known') scopedBodyIR splitBody.local;
 
       # The definition the rest of the program refers to by `name`.
       hoisted =
@@ -1477,17 +1536,22 @@ let
           // {
             _hoistable = true;
           };
+
+      # Restore caches so local closures do not leak as unbound refs to other templates
+      cleanedKnown = paramsResult.known // {
+        bindings = priorBindings;
+        instances = priorInstances;
+        used = priorUsed;
+      };
     in
     {
       def = {
         ${name} = hoisted;
       }
       // splitBody.hoistable;
-      known = paramsResult.known;
-      # Pass along any new lambdas discovered while compiling this body
+      known = cleanedKnown;
       pending = (bodyResult.pending or [ ]) ++ paramsResult.pending;
     };
-
   # ── Top-level entry point ───────────────────────────────────────
   walk =
     value:

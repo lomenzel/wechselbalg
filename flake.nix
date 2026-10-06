@@ -48,6 +48,7 @@
             tsRuntime
             pythonRuntime
             kotlinRuntime
+            wasm
             ;
         };
       };

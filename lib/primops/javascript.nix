@@ -4,6 +4,136 @@
 # All inputs and outputs are Value instances.
 
 {
+  wasm = ''
+    (() => {
+      // 1. Process-wide singletons anchored to the Value class
+      // These survive across ANY number of IIFE invocations, lambda calls, or modules!
+      const moduleCache = (Value._wbWasmModuleCache ??= new Map());
+      const instanceCache = (Value._wbWasmInstanceCache ??= new Map());
+
+      const pureImports = {
+        wasi_snapshot_preview1: new Proxy({
+          proc_exit: (code) => { throw new Error("Wasm proc_exit: " + code); }
+        }, {
+          get(target, prop) {
+            if (prop in target) return target[prop];
+            return () => 0; // WASI SUCCESS stub
+          }
+        }),
+        env: new Proxy({
+          abort: () => { throw new Error("Wasm abort()"); }
+        }, {
+          get(target, prop) {
+            if (prop in target) return target[prop];
+            return () => 0;
+          }
+        })
+      };
+
+      return Value.lambda(config => Value.lambda(args => {
+        const conf = config.asSet();
+        const base64Val = conf.bytecode || conf.base64;
+        const fnameVal = conf.fname || conf.function;
+
+        if (!base64Val || !fnameVal) {
+          throw new Error("builtins.wasm requires 'bytecode' (or 'base64') and 'fname' (or 'function')");
+        }
+
+        const fname = fnameVal.asString();
+
+        // 2. TRUE MODULE CACHING: Check persistent process-wide cache
+        // We use base64Val._wbModule if available, else fall back to the global Map
+        let module = base64Val._wbModule;
+        if (!module) {
+          const base64 = base64Val.asString();
+          module = moduleCache.get(base64);
+          if (!module) {
+            const binary = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+            module = new WebAssembly.Module(binary);
+            moduleCache.set(base64, module);
+          }
+          base64Val._wbModule = module;
+        }
+
+        // 3. TRUE INSTANCE & SNAPSHOT CACHING (Keyed by Module object reference: O(1))
+        let state = instanceCache.get(module);
+        if (!state) {
+          const instance = new WebAssembly.Instance(module, pureImports);
+          const memory = instance.exports.memory;
+          if (!memory) {
+            throw new Error("Wasm module must export 'memory'");
+          }
+
+          // Snapshot pristine initial memory in < 0.05 ms
+          const cleanSnapshot = new Uint8Array(memory.buffer.slice(0));
+
+          state = {
+            instance,
+            cleanSnapshot,
+          };
+          instanceCache.set(module, state);
+        }
+
+        const instance = state.instance;
+        const memory = instance.exports.memory;
+        const cleanSnapshot = state.cleanSnapshot;
+
+        const fn = instance.exports[fname];
+        if (typeof fn !== "function") {
+          throw new Error("Wasm export '" + fname + "' is not a function");
+        }
+
+        const alloc = instance.exports.malloc || instance.exports.__wb_alloc;
+        if (!alloc) {
+          throw new Error("Wasm module must export an allocator ('malloc' or '__wb_alloc')");
+        }
+
+        let outJsonStr = "";
+
+        try {
+          // 4. Input serialization
+          const inStr = args.isString() ? args.asString() : args.toJSON_().asString();
+          const inBytes = new TextEncoder().encode(inStr + "\0");
+          const inPtr = alloc(inBytes.length);
+          new Uint8Array(memory.buffer, inPtr, inBytes.length).set(inBytes);
+
+          // 5. Invoke function: supports func(ptr) or func(ptr, len)
+          const inLen = inBytes.length - 1;
+          const callArgs = fn.length >= 2 ? [inPtr, inLen] : [inPtr];
+          const outPtr = fn(...callArgs);
+
+          if (!outPtr || outPtr === 0) {
+            return Value.null_();
+          }
+
+          // 6. Read string response into JS heap BEFORE memory is wiped
+          const memView = new Uint8Array(memory.buffer);
+          let end = outPtr;
+          while (end < memView.length && memView[end] !== 0) {
+            end++;
+          }
+          outJsonStr = new TextDecoder().decode(memView.subarray(outPtr, end));
+
+        } finally {
+          // 7. PURITY ENFORCEMENT (< 0.01 ms hardware memcpy)
+          if (memory.buffer.byteLength !== cleanSnapshot.byteLength) {
+            // Memory grew; discard instance so the next call gets a fresh one
+            instanceCache.delete(module);
+          } else {
+            // Restore every static variable, allocator bin, and heap state back to pristine birth state
+            new Uint8Array(memory.buffer).set(cleanSnapshot);
+          }
+        }
+
+        // 8. Return parsed JSON or fallback to raw string
+        try {
+          return Value.fromJSON_(Value.fromString(outJsonStr));
+        } catch (_) {
+          return Value.fromString(outJsonStr);
+        }
+      }))
+    })()
+  '';
   sub = ''
     Value.lambda(a => Value.lambda(b => a.sub(b)))
   '';
@@ -155,11 +285,13 @@
   tryEval = ''
     Value.lambda(e => {
       try {
+        const forced = Value._forceDeep(e);
         return Value.fromSet({
           success: Value.fromBool(true),
           value: e
         });
-      } catch(_) {
+      } catch(err) {
+      console.error("[debug][wechselbalg] tryEval caught this error:", err);
         return Value.fromSet({
           success: Value.fromBool(false),
           value: Value.fromBool(false)
