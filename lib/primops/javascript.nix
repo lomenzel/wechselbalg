@@ -11,9 +11,27 @@
       const moduleCache = (Value._wbWasmModuleCache ??= new Map());
       const instanceCache = (Value._wbWasmInstanceCache ??= new Map());
 
+      let currentMemory = null;
+
       const pureImports = {
         wasi_snapshot_preview1: new Proxy({
-          proc_exit: (code) => { throw new Error("Wasm proc_exit: " + code); }
+          proc_exit: (code) => { throw new Error("Wasm proc_exit: " + code); },
+          fd_write: (fd, iovs, iovs_len, nwritten) => {
+            if (!currentMemory) return 0;
+            const view = new DataView(currentMemory.buffer);
+            let total = 0;
+            for (let i = 0; i < iovs_len; i++) {
+              const ptr = view.getUint32(iovs + i * 8, true);
+              const len = view.getUint32(iovs + i * 8 + 4, true);
+              const bytes = new Uint8Array(currentMemory.buffer, ptr, len);
+              const str = new TextDecoder().decode(bytes);
+              if (fd === 1) process.stdout.write(str);
+              if (fd === 2) process.stderr.write(str);
+              total += len;
+            }
+            if (nwritten) view.setUint32(nwritten, total, true);
+            return 0;
+          }
         }, {
           get(target, prop) {
             if (prop in target) return target[prop];
@@ -40,6 +58,8 @@
         }
 
         const fname = fnameVal.asString();
+        console.log("-> CALLING WASM:", fname);
+
 
         // 2. TRUE MODULE CACHING: Check persistent process-wide cache
         // We use base64Val._wbModule if available, else fall back to the global Map
@@ -59,6 +79,7 @@
         let state = instanceCache.get(module);
         if (!state) {
           const instance = new WebAssembly.Instance(module, pureImports);
+          currentMemory = instance.exports.memory;
           const memory = instance.exports.memory;
           if (!memory) {
             throw new Error("Wasm module must export 'memory'");
@@ -100,6 +121,7 @@
           // 5. Invoke function: supports func(ptr) or func(ptr, len)
           const inLen = inBytes.length - 1;
           const callArgs = fn.length >= 2 ? [inPtr, inLen] : [inPtr];
+          currentMemory = memory;
           const outPtr = fn(...callArgs);
 
           if (!outPtr || outPtr === 0) {
@@ -115,14 +137,9 @@
           outJsonStr = new TextDecoder().decode(memView.subarray(outPtr, end));
 
         } finally {
-          // 7. PURITY ENFORCEMENT (< 0.01 ms hardware memcpy)
-          if (memory.buffer.byteLength !== cleanSnapshot.byteLength) {
-            // Memory grew; discard instance so the next call gets a fresh one
-            instanceCache.delete(module);
-          } else {
-            // Restore every static variable, allocator bin, and heap state back to pristine birth state
-            new Uint8Array(memory.buffer).set(cleanSnapshot);
-          }
+          currentMemory = null;
+          // Fresh instance per call guarantees 100% purity without heap/global desync
+          instanceCache.delete(module);
         }
 
         // 8. Return parsed JSON or fallback to raw string

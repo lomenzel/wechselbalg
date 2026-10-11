@@ -34,7 +34,7 @@
       lib = import ./lib;
 
       overlays.default = final: prev: {
-        lib = prev.lib // {
+        lib = prev.lib.extend (lfinal: lprev: {
           inherit (self.lib)
             toJS
             toTS
@@ -50,7 +50,7 @@
             kotlinRuntime
             wasm
             ;
-        };
+        });
       };
 
       packages = eachSystem (
