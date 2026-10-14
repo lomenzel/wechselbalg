@@ -83,8 +83,7 @@ pkgs.stdenv.mkDerivation {
   nativeBuildInputs = [ lib-drv ];
   # …
   buildPhase = ''
-    g++ -std=c++23 main.cpp \
-      -lmyapp -o main
+    g++ -std=c++23 main.cpp -o main
   '';
 }
 ```

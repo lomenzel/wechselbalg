@@ -150,6 +150,15 @@ let
             pkgs.gcc
             pkgs.ninja
           ];
+          buildInputs = [
+            pkgs.wasmtime
+          ];
+          propagatedBuildInputs = [
+            pkgs.wasmtime
+          ];
+          setupHook = pkgs.writeText "wb-cpp-setup-hook.sh" ''
+            export NIX_LDFLAGS="$NIX_LDFLAGS -l${libBase} -lwasmtime"
+          '';
           buildPhase = ''
             runHook preBuild
             ${pkgs.writeShellScript "build.sh" ''

@@ -3,6 +3,189 @@
 # Each is a string of C++ code evaluating to a Value::lambda (curried).
 
 {
+wasm = ''
+    Value::lambda([](const Value& config) {
+      return Value::lambda([config](const Value& args) -> Value {
+        // ScopeGuard helper for RAII cleanup
+        struct ScopeGuard {
+          std::function<void()> cleanup;
+          ~ScopeGuard() { if (cleanup) cleanup(); }
+        };
+
+        auto formatError = [](wasmtime_error_t* err, wasm_trap_t* trap, const std::string& fallback) -> std::string {
+          if (err) {
+            wasm_byte_vec_t msg;
+            wasmtime_error_message(err, &msg);
+            std::string s(msg.data, msg.size);
+            wasm_byte_vec_delete(&msg);
+            wasmtime_error_delete(err);
+            return s;
+          }
+          if (trap) {
+            wasm_byte_vec_t msg;
+            wasm_trap_message(trap, &msg);
+            std::string s(msg.data, msg.size);
+            wasm_byte_vec_delete(&msg);
+            wasm_trap_delete(trap);
+            return s;
+          }
+          return fallback;
+        };
+
+        // 1. Thread-safe Engine & Module Cache
+        static wasm_engine_t* engine = wasm_engine_new();
+        static std::mutex cache_mutex;
+        static std::unordered_map<std::string, wasmtime_module_t*> module_cache;
+
+        auto conf = config.asSet();
+        std::string base64Str = conf.count("bytecode") ? conf.at("bytecode").asString()
+                                : conf.count("base64")   ? conf.at("base64").asString()
+                                : "";
+        std::string fname = conf.count("fname")        ? conf.at("fname").asString()
+                            : conf.count("function")   ? conf.at("function").asString()
+                            : "";
+
+        if (base64Str.empty() || fname.empty()) {
+          throw std::runtime_error("builtins.wasm requires 'bytecode'/'base64' and 'fname'/'function'");
+        }
+
+        // 2. Fetch or compile module
+        wasmtime_module_t* module = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(cache_mutex);
+          auto it = module_cache.find(base64Str);
+          if (it != module_cache.end()) {
+            module = it->second;
+          } else {
+            std::vector<uint8_t> wasmBytes = __wb_base64_decode(base64Str);
+            wasmtime_error_t* err = wasmtime_module_new(engine, wasmBytes.data(), wasmBytes.size(), &module);
+            if (err) {
+              throw std::runtime_error("Failed to compile WebAssembly module: " + formatError(err, nullptr, ""));
+            }
+            module_cache[base64Str] = module;
+          }
+        }
+
+        // 3. Isolated Store & Context per call (RAII managed)
+        wasmtime_store_t* store = wasmtime_store_new(engine, nullptr, nullptr);
+        ScopeGuard storeGuard{[&]() { wasmtime_store_delete(store); }};
+        wasmtime_context_t* context = wasmtime_store_context(store);
+
+        wasi_config_t* wasi_config = wasi_config_new();
+        wasi_config_inherit_stdout(wasi_config);
+        wasi_config_inherit_stderr(wasi_config);
+        wasmtime_error_t* wasi_err = wasmtime_context_set_wasi(context, wasi_config);
+        if (wasi_err) {
+          throw std::runtime_error("WASI context setup failed: " + formatError(wasi_err, nullptr, ""));
+        }
+
+        wasmtime_linker_t* linker = wasmtime_linker_new(engine);
+        ScopeGuard linkerGuard{[&]() { wasmtime_linker_delete(linker); }};
+
+        wasmtime_error_t* link_err = wasmtime_linker_define_wasi(linker);
+        if (link_err) {
+          throw std::runtime_error("WASI linker setup failed: " + formatError(link_err, nullptr, ""));
+        }
+
+        wasmtime_instance_t instance;
+        wasm_trap_t* trap = nullptr;
+        wasmtime_error_t* error = wasmtime_linker_instantiate(linker, context, module, &instance, &trap);
+        if (error || trap) {
+          throw std::runtime_error("Failed to instantiate WebAssembly module: " + formatError(error, trap, ""));
+        }
+
+        // 4. Exports lookup
+        wasmtime_extern_t mem_ext, malloc_ext, fn_ext;
+        if (!wasmtime_instance_export_get(context, &instance, "memory", 6, &mem_ext) ||
+            mem_ext.kind != WASMTIME_EXTERN_MEMORY) {
+          throw std::runtime_error("Wasm module must export 'memory'");
+        }
+        wasmtime_memory_t memory = mem_ext.of.memory;
+
+        bool has_alloc = wasmtime_instance_export_get(context, &instance, "malloc", 6, &malloc_ext);
+        if (!has_alloc) {
+          has_alloc = wasmtime_instance_export_get(context, &instance, "__wb_alloc", 10, &malloc_ext);
+        }
+        if (!has_alloc || malloc_ext.kind != WASMTIME_EXTERN_FUNC) {
+          throw std::runtime_error("Wasm module must export an allocator ('malloc' or '__wb_alloc')");
+        }
+        wasmtime_func_t malloc_fn = malloc_ext.of.func;
+
+        if (!wasmtime_instance_export_get(context, &instance, fname.c_str(), fname.size(), &fn_ext) ||
+            fn_ext.kind != WASMTIME_EXTERN_FUNC) {
+          throw std::runtime_error("Wasm export '" + fname + "' is not a function");
+        }
+        wasmtime_func_t target_fn = fn_ext.of.func;
+
+        // 5. Serialize input & bounds-checked allocation
+        std::string inStr = args.isString() ? args.asString() : args.toJSON();
+        inStr.push_back('\0');
+
+        wasmtime_val_t malloc_arg { .kind = WASMTIME_I32, .of = { .i32 = static_cast<int32_t>(inStr.size()) } };
+        wasmtime_val_t malloc_ret;
+        error = wasmtime_func_call(context, &malloc_fn, &malloc_arg, 1, &malloc_ret, 1, &trap);
+        if (error || trap) {
+          throw std::runtime_error("Wasm malloc failed: " + formatError(error, trap, ""));
+        }
+        int32_t inPtr = malloc_ret.of.i32;
+
+        uint8_t* memData = wasmtime_memory_data(context, &memory);
+        size_t memSize = wasmtime_memory_data_size(context, &memory);
+
+        // Bounds check (Fix 1.3)
+        if (inPtr <= 0 || static_cast<size_t>(inPtr) + inStr.size() > memSize) {
+          throw std::runtime_error("Wasm malloc returned invalid or out-of-bounds pointer: " + std::to_string(inPtr));
+        }
+        std::copy_n(inStr.data(), inStr.size(), memData + inPtr);
+
+        // 6. Inspect function signature (Fix 1.2 & 2.1)
+        wasm_functype_t* fnType = wasmtime_func_type(context, &target_fn);
+        ScopeGuard fnTypeGuard{[&]() { wasm_functype_delete(fnType); }};
+        size_t paramCount = wasm_functype_params(fnType)->size;
+
+        if (paramCount > 2) {
+          throw std::runtime_error("Wasm function '" + fname + "' takes " + std::to_string(paramCount) +
+                                   " parameters, but Wechselbalg ABI expects 1 (ptr) or 2 (ptr, len)");
+        }
+
+        wasmtime_val_t callArgs[2];
+        if (paramCount >= 1) {
+          callArgs[0] = { .kind = WASMTIME_I32, .of = { .i32 = inPtr } };
+        }
+        if (paramCount == 2) {
+          callArgs[1] = { .kind = WASMTIME_I32, .of = { .i32 = static_cast<int32_t>(inStr.size() - 1) } };
+        }
+
+        wasmtime_val_t retVal;
+        error = wasmtime_func_call(context, &target_fn, callArgs, paramCount, &retVal, 1, &trap);
+        if (error || trap) {
+          throw std::runtime_error("Execution of Wasm function '" + fname + "' failed: " + formatError(error, trap, ""));
+        }
+        int32_t outPtr = retVal.of.i32;
+
+        // 7. Read output string
+        std::string outJsonStr;
+        if (outPtr != 0) {
+          memData = wasmtime_memory_data(context, &memory);
+          memSize = wasmtime_memory_data_size(context, &memory);
+          if (static_cast<size_t>(outPtr) >= memSize) {
+            throw std::runtime_error("Wasm function returned out-of-bounds pointer: " + std::to_string(outPtr));
+          }
+          for (size_t p = outPtr; p < memSize && memData[p] != 0; ++p) {
+            outJsonStr.push_back(static_cast<char>(memData[p]));
+          }
+        }
+
+        if (outPtr == 0) return Value::null_();
+
+        try {
+          return Value::fromJSON(outJsonStr);
+        } catch (...) {
+          return Value::fromString(outJsonStr);
+        }
+      });
+    })
+  '';
   sub = ''
     Value::lambda([](const Value& a) {
       return Value::lambda([a](const Value& b) {

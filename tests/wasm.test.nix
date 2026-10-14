@@ -1,6 +1,5 @@
-lib:
+{ lib, pkgs }:
 let
-  pkgs = import <nixpkgs> { };
 
   # Compile WAT to base64 on evaluation
   wasmBytecode = builtins.readFile (

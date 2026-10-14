@@ -16,7 +16,7 @@ let
         if builtins.typeOf tests == "list" then
           tests
         else if builtins.typeOf tests == "lambda" then
-          tests lib
+          tests { inherit pkgs lib; }
         else
           [ tests ];
       fileName = builtins.baseNameOf (builtins.toString path);
@@ -503,6 +503,7 @@ let
           backendName = "cpp";
           inherit testId test;
           nativeBuildInputs = [ pkgs.gcc ];
+          buildInputs = [ pkgs.wasmtime ];
           runScript =
             if !t.success then
               ''
@@ -511,7 +512,7 @@ let
               ''
             else
               ''
-                g++ -std=c++23 -O2 ${cppSrc} -o test_bin
+                g++ -std=c++23 -O2 ${cppSrc} -lwasmtime -o test_bin
                 ./test_bin
               '';
         };
@@ -546,15 +547,7 @@ let
             else
               { success = false; };
 
-          # Keep derivation building so test runner logs the actual compiler output
-          generatedLib =
-            if rawLib.success then
-              rawLib.value.overrideAttrs (old: {
-                buildPhase = "(${old.buildPhase or ""}) || true";
-                installPhase = "(${old.installPhase or ""}) || true; mkdir -p $out/lib $out/include";
-              })
-            else
-              null;
+          generatedLib = if rawLib.success then rawLib.value else null;
 
           runnerSrc =
             if !t.success || generatedLib == null then
@@ -605,7 +598,7 @@ let
               ''
             else
               ''
-                g++ -std=c++23 -O2 ${runnerSrc} -ltestLib -o test_bin
+                g++ -std=c++23 -O2 ${runnerSrc} -lwasmtime -o test_bin
                 ./test_bin
               '';
         };

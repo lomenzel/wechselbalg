@@ -8,9 +8,12 @@
 
 #pragma once
 
+#include <array>
+#include <mutex>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <iostream>
@@ -26,6 +29,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <wasi.h>
+#include <wasmtime.h>
 
 struct Value;
 
@@ -1023,6 +1028,33 @@ inline Value __wb_add(const Value &a, const Value &b) {
     return Value::fromString(a.asString() + b.asString());
   throw std::runtime_error("wechselbalg: cannot add " + a.typeOf() + " and " +
                            b.typeOf());
+}
+
+// ── Base64 decoding helper ───────────────────────────────────────
+inline std::vector<uint8_t> __wb_base64_decode(const std::string &in) {
+  static const auto T = []() {
+    std::array<int8_t, 256> tbl;
+    tbl.fill(-1);
+    const char *chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (int i = 0; i < 64; i++) tbl[static_cast<unsigned char>(chars[i])] = i;
+    return tbl;
+  }();
+
+  std::vector<uint8_t> out;
+  out.reserve((in.size() * 3) / 4);
+  int val = 0, valb = -8;
+  for (unsigned char c : in) {
+    if (c == '=') break;
+    int8_t d = T[c];
+    if (d == -1) continue;
+    val = (val << 6) + d;
+    valb += 6;
+    if (valb >= 0) {
+      out.push_back(static_cast<uint8_t>((val >> valb) & 0xFF));
+      valb -= 8;
+    }
+  }
+  return out;
 }
 
 inline Value __wb_sub(const Value &a, const Value &b) {

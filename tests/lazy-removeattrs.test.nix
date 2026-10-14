@@ -7,7 +7,7 @@
 #
 # In Nix: removeAttrs creates a new set without forcing values → lazy access works.
 # In JS/Python: { ...set } forces all values via get trap → infinite recursion.
-lib: [
+{ lib, ... }: [
   {
     description = "removeAttrs must be lazy through fixpoint";
     func =
