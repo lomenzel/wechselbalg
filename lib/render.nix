@@ -310,7 +310,9 @@ let
     else if node._t == "let" then
       builtins.concatMap (n: collectRefs node.bindings.${n}) (builtins.attrNames node.bindings)
       ++ collectRefs node.body
-      ++ builtins.concatMap (n: collectDefRefs node.localDefs.${n}) (builtins.attrNames (node.localDefs or { }))
+      ++ builtins.concatMap (n: collectDefRefs node.localDefs.${n}) (
+        builtins.attrNames (node.localDefs or { })
+      )
     else
       [ ];
 
@@ -325,13 +327,10 @@ let
           ) def.params.formals
         else
           [ ];
-      fromEnv =
-        if def.params.envIR or null != null then
-          collectRefs def.params.envIR
-        else
-          [ ];
-      fromLocalDefs =
-        builtins.concatMap (n: collectDefRefs def.localDefs.${n}) (builtins.attrNames (def.localDefs or { }));
+      fromEnv = if def.params.envIR or null != null then collectRefs def.params.envIR else [ ];
+      fromLocalDefs = builtins.concatMap (n: collectDefRefs def.localDefs.${n}) (
+        builtins.attrNames (def.localDefs or { })
+      );
     in
     fromFormals ++ fromEnv ++ collectRefs def.body ++ fromLocalDefs;
 
@@ -384,41 +383,41 @@ let
     else
       let
 
-      usedPrimops = collectPrimops walkResult;
+        usedPrimops = collectPrimops walkResult;
 
-      stringDedup = buildStringDedup walkResult;
-      dedupBackend =
-        if stringDedup == { } then
-          backend
-        else
-          backend
-          // {
-            renderString =
-              value:
-              if builtins.hasAttr value stringDedup then
-                backend.renderVar stringDedup.${value}
-              else
-                backend.renderString value;
-          };
+        stringDedup = buildStringDedup walkResult;
+        dedupBackend =
+          if stringDedup == { } then
+            backend
+          else
+            backend
+            // {
+              renderString =
+                value:
+                if builtins.hasAttr value stringDedup then
+                  backend.renderVar stringDedup.${value}
+                else
+                  backend.renderString value;
+            };
 
-      defNames = builtins.attrNames walkResult.defs;
-      renderedDefs = builtins.map (name: renderDef dedupBackend name walkResult.defs.${name}) defNames;
-      renderedExpr = renderNode dedupBackend walkResult.ir;
+        defNames = builtins.attrNames walkResult.defs;
+        renderedDefs = builtins.map (name: renderDef dedupBackend name walkResult.defs.${name}) defNames;
+        renderedExpr = renderNode dedupBackend walkResult.ir;
 
-      stringDefNames = builtins.sort (a: b: a < b) (builtins.attrValues stringDedup);
-      stringDefs = builtins.listToAttrs (
-        builtins.map (strValue: {
-          name = stringDedup.${strValue};
-          value = backend.renderString strValue;
-        }) (builtins.attrNames stringDedup)
-      );
-    in
-    {
-      defs = renderedDefs;
-      inherit defNames;
-      expr = renderedExpr;
-      inherit usedPrimops stringDefs stringDefNames;
-    };
+        stringDefNames = builtins.sort (a: b: a < b) (builtins.attrValues stringDedup);
+        stringDefs = builtins.listToAttrs (
+          builtins.map (strValue: {
+            name = stringDedup.${strValue};
+            value = backend.renderString strValue;
+          }) (builtins.attrNames stringDedup)
+        );
+      in
+      {
+        defs = renderedDefs;
+        inherit defNames;
+        expr = renderedExpr;
+        inherit usedPrimops stringDefs stringDefNames;
+      };
 
   # Main entry point — returns the rendered program as a single string.
   render = backend: walkResult: backend.renderProgram (prepare backend walkResult);

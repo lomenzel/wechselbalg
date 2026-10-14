@@ -1,6 +1,5 @@
 {
   pkgs,
-  wechselbalg,
 }:
 let
   lib = pkgs.lib;
@@ -149,7 +148,7 @@ let
   smokeTestDrv =
     let
       smokeLib1 =
-        (wechselbalg.mkCppLibrary {
+        (lib.mkCppLibrary {
           value = {
             increment = x: x + 1;
           };
@@ -158,7 +157,7 @@ let
           pkgs;
 
       smokeLib2 =
-        (wechselbalg.mkCppLibrary {
+        (lib.mkCppLibrary {
           value = {
             a = 41;
             b = -1;
@@ -209,13 +208,13 @@ let
       mkTestDrv =
         { testId, test }:
         let
-          t = tryTranslate wechselbalg.toJS test;
+          t = tryTranslate lib.toJS test;
           testFile =
             if !t.success then
               null
             else
               pkgs.writeText "test-${testId}.js" ''
-                ${wechselbalg.jsRuntime}
+                ${lib.jsRuntime}
                 const func = ${t.func};
                 const params = ${t.params};
                 const expected = ${t.expected};
@@ -250,14 +249,14 @@ let
       mkTestDrv =
         { testId, test }:
         let
-          t = tryTranslate wechselbalg.toTS test;
+          t = tryTranslate lib.toTS test;
           testFile =
             if !t.success then
               null
             else
               pkgs.writeText "test-${testId}.ts" ''
                 declare var process: { exit(code: number): never };
-                ${wechselbalg.tsRuntime}
+                ${lib.tsRuntime}
                 const func = ${t.func};
                 const params = ${t.params};
                 const expected = ${t.expected};
@@ -299,7 +298,7 @@ let
       mkTestDrv =
         { testId, test }:
         let
-          t = tryTranslate wechselbalg.toPython test;
+          t = tryTranslate lib.toPython test;
           testFile =
             if !t.success then
               null
@@ -307,7 +306,7 @@ let
               pkgs.writeText "test-${testId}.py" ''
                 import sys
                 sys.setrecursionlimit(10000)
-                ${wechselbalg.pythonRuntime}
+                ${lib.pythonRuntime}
                 func = ${t.func}
                 params = ${t.params}
                 expected = ${t.expected}
@@ -339,13 +338,13 @@ let
       mkTestDrv =
         { testId, test }:
         let
-          t = tryTranslate wechselbalg.toKotlin test;
+          t = tryTranslate lib.toKotlin test;
           testFile =
             if !t.success then
               null
             else
               pkgs.writeText "Test-${testId}.kt" ''
-                ${wechselbalg.kotlinRuntime}
+                ${lib.kotlinRuntime}
                 fun main() {
                   val func = ${t.func}
                   val params = ${t.params}
@@ -411,7 +410,7 @@ let
             else
               a == b;
 
-          t = tryTranslate wechselbalg.toNix test;
+          t = tryTranslate lib.toNix test;
           evalResult =
             if !t.success then
               {
@@ -466,7 +465,7 @@ let
       mkTestDrv =
         { testId, test }:
         let
-          t = tryTranslate wechselbalg.toCpp test;
+          t = tryTranslate lib.toCpp test;
           cppSrc =
             if !t.success then
               null
@@ -475,7 +474,7 @@ let
                 #include <iostream>
                 #include <exception>
 
-                ${wechselbalg.cppRuntime}
+                ${lib.cppRuntime}
 
                 int main() {
                   try {
@@ -526,12 +525,12 @@ let
         { testId, test }:
         let
           fnName = testId;
-          t = tryTranslate wechselbalg.toCpp test;
+          t = tryTranslate lib.toCpp test;
 
           tryLibSpec =
             if t.success then
               builtins.tryEval (
-                wechselbalg.mkCppLibrary {
+                lib.mkCppLibrary {
                   value = {
                     ${fnName} = test.func;
                   };
@@ -617,7 +616,7 @@ let
       mkTestDrv =
         { testId, test }:
         let
-          t = tryTranslate wechselbalg.toRust test;
+          t = tryTranslate lib.toRust test;
           testFile =
             if !t.success then
               null
@@ -626,7 +625,7 @@ let
                 #![allow(dead_code, unused_variables, unused_mut, unused_parens, non_snake_case)]
 
                 mod value {
-                  ${wechselbalg.rustRuntime}
+                  ${lib.rustRuntime}
                 }
                 use value::Value;
 

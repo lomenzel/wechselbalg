@@ -31,26 +31,30 @@
       treefmtEval = eachSystem ({ pkgs, ... }: treefmt-nix.lib.evalModule pkgs ./treefmt.nix);
     in
     {
-      lib = import ./lib;
+      #lib = import ./lib;
 
       overlays.default = final: prev: {
-        lib = prev.lib.extend (lfinal: lprev: {
-          inherit (self.lib)
-            toJS
-            toTS
-            toCpp
-            toPython
-            toKotlin
-            toNix
-            mkCppLibrary
-            cppRuntime
-            jsRuntime
-            tsRuntime
-            pythonRuntime
-            kotlinRuntime
-            wasm
-            ;
-        });
+        lib = prev.lib.extend (
+          lfinal: lprev: {
+            inherit (import ./lib final)
+              toJS
+              toTS
+              toCpp
+              toPython
+              toKotlin
+              toNix
+              toRust
+              mkCppLibrary
+              cppRuntime
+              jsRuntime
+              tsRuntime
+              pythonRuntime
+              kotlinRuntime
+              rustRuntime
+              wasm
+              ;
+          }
+        );
       };
 
       packages = eachSystem (
@@ -91,7 +95,6 @@
         let
           testsByBackend = import ./tests {
             inherit pkgs;
-            wechselbalg = self.lib;
           };
         in
         testsByBackend

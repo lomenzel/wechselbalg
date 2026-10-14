@@ -1659,7 +1659,8 @@ let
         wechselbalg: internal IR validation failed (${toString (builtins.length errors)} error(s)):
           ${builtins.concatStringsSep "\n  " shown}''
     else
-      builtins.trace report result;
+      # builtins.trace report
+      result;
 
 in
 walk

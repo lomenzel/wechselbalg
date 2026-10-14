@@ -106,6 +106,7 @@ Generating Nix is simpler and does not require a runtime:
 # Serializing a function to a Nix string
 string = lib.toNix (x: x + 1);
 ```
+
 ## Limitations
 
 - Infinite attribute sets: i have not yet found a way to detect infinitly recursive attr sets. They are translated to a depth of 500. Any runtime access deeper than that will throw. Generating them at runtime should work tho.
@@ -113,7 +114,7 @@ string = lib.toNix (x: x + 1);
 - Paths: Paths are completely unsupported. they can be translated but accessing them at runtime throws
 - Partial Primop implementation: Not every primop is implemented in every language. especially the ones operating on paths. Unknown primops translate to a runtime throw.
 - translated tryEval catches every error. even stack overflows. this is intentional but a difference to the real nix
-
+- if translating the lib.wasm function with the nix backend, it generates an expression with your host system hardcoded. use --impure when running the generated expression to use the system its running on instead of the system the expression was translated on
 
 ## Development
 

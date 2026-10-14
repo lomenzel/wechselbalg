@@ -9,6 +9,7 @@
 #
 # This file is the single entry-point. It wires together the walker,
 # renderer, and backends.
+pkgs:
 let
   walk = import ./walk.nix;
   renderer = import ./render.nix;
@@ -19,7 +20,10 @@ let
     cpp = import ./backends/cpp.nix;
     python = import ./backends/python.nix;
     kotlin = import ./backends/kotlin.nix;
-    nix = import ./backends/nix.nix;
+    nix = import ./backends/nix.nix {
+      inherit (pkgs) lib;
+      inherit pkgs;
+    };
     rust = import ./backends/rust.nix;
     rs = rust; # convenience alias
   };
@@ -252,10 +256,44 @@ let
       lang = "rust";
       inherit value;
     };
-  toRS = toRust; # alias
+  toRS = toRust;
+  cppRuntime = builtins.readFile ./runtime/cpp/value.hpp;
+
+  rustRuntime = builtins.readFile ./runtime/rust/value.rs;
+  jsRuntime = builtins.readFile ./runtime/js/value.js;
+  tsRuntime = builtins.readFile ./runtime/ts/value.ts;
+  pythonRuntime = builtins.readFile ./runtime/python/value.py;
+  kotlinRuntime = builtins.readFile ./runtime/kotlin/Value.kt;
+
+  wasm =
+    let
+      __wasm =
+        a: b:
+        builtins.fromJSON (
+          builtins.readFile (
+            pkgs.runCommand "wasm-thing" { } ''
+              ${pkgs.nodejs}/bin/node ${pkgs.writeText "index.js" ''
+                ${jsRuntime}
+                const res = ${toJS wasm}.call(${toJS a}).call(${toJS b})
+                const fs = require('fs');
+                fs.writeFileSync(process.env.out, res.toJSON_().asString());
+              ''}
+            ''
+          )
+        );
+    in
+    args: input: __wasm args input;
+
 in
 {
   inherit
+    cppRuntime
+    rustRuntime
+    jsRuntime
+    tsRuntime
+    pythonRuntime
+    kotlinRuntime
+
     translate
     toJS
     toTS
@@ -266,37 +304,11 @@ in
     toRust
     toRS
     mkCppLibrary
+
+    walk
+    backends
+    wasm
     ;
 
-  # The C++ Value type header — users include this in their project.
-  # Usage: builtins.toFile "wechselbalg.hpp" lib.cppRuntime
-  cppRuntime = builtins.readFile ./runtime/cpp/value.hpp;
-
-  # The Rust Value runtime type.
-  rustRuntime = builtins.readFile ./runtime/rust/value.rs;
-
-  # The JS Value class — users include this before using toJS output.
-  # Usage: write to file, <script src="value.js"> before generated code.
-  jsRuntime = builtins.readFile ./runtime/js/value.js;
-
-  # The TS Value class — users include this before using toTS output.
-  # Usage: write to file, import or inline before generated code.
-  tsRuntime = builtins.readFile ./runtime/ts/value.ts;
-
-  # The Python Value class — users import this before using toPython output.
-  # Usage: write to file, exec(open("value.py").read()) before generated code.
-  pythonRuntime = builtins.readFile ./runtime/python/value.py;
-
-  # The Kotlin Value class — users include this before using toKotlin output.
-  # Usage: write to file or compile together with generated code.
-  kotlinRuntime = builtins.readFile ./runtime/kotlin/Value.kt;
-
-  wasm = let 
-    __wasm = a: b: throw "You need to use wechselbalg to translate to JS or TS to use the lib.wasm function. there currently are no implementations for other languages";
-  in args: input: __wasm args input;
-
-  # Escape hatches for advanced users
-  inherit walk;
-  inherit backends;
   ir = import ./ir.nix;
 }

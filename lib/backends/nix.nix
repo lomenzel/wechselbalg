@@ -4,7 +4,7 @@
 # The ultimate meta move: Nix compiling to Nix.
 # Generated code is a bare Nix expression — no runtime needed.
 # Values are plain Nix values (ints, strings, lists, attrsets, lambdas).
-
+{ lib, pkgs, ... }:
 let
   join = sep: list: builtins.concatStringsSep sep list;
 
@@ -25,7 +25,7 @@ let
         "import"
       ];
     in
-    if builtins.elem name reserved then "_${name}" else name;
+    if builtins.elem name reserved then "__wb_rsv_${name}" else name;
 
   backend = {
     name = "nix";
@@ -192,7 +192,7 @@ let
         "let\n${defBlock}\nin ${expr}";
 
     # ── Primops ─────────────────────────────────────────────────
-    primops = import ../primops/nix.nix;
+    primops = import ../primops/nix.nix { inherit lib pkgs; };
   };
 
 in
