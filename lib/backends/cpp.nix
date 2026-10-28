@@ -20,18 +20,32 @@ let
   # let-bindings may have forward references that require lazy init.
   isCheapExpr =
     str:
-    hasPrefix "Value::fromInt(" str
-    || hasPrefix "Value::fromFloat(" str
-    || hasPrefix "Value::fromBool(" str
-    || hasPrefix "Value::fromString(" str
-    || str == "Value::null_()"
-    || hasPrefix "__wb_primop_" str
-    || hasPrefix "__wb_unknown_primop(" str;
+    let
+      pfx7 = builtins.substring 0 7 str;
+      pfx5 = builtins.substring 0 5 str;
+    in
+    if pfx7 == "Value::" then
+      let
+        sub = builtins.substring 7 7 str;
+      in
+      sub == "fromInt"
+      || sub == "fromBoo"
+      || sub == "fromStr"
+      || sub == "fromFlo"
+      || str == "Value::null_()"
+    else if pfx5 == "__wb_" then
+      let
+        sub = builtins.substring 5 7 str;
+      in
+      sub == "primop_" || sub == "unknown"
+    else
+      false;
 
-  # Like isCheapExpr but also includes pure compound constructors.
-  # Safe for renderApply where evaluation order doesn't matter.
   isPureExpr =
-    str: isCheapExpr str || hasPrefix "Value::fromSet(" str || hasPrefix "Value::fromList(" str;
+    str:
+    isCheapExpr str
+    || builtins.substring 0 15 str == "Value::fromSet("
+    || builtins.substring 0 16 str == "Value::fromList(";
 
   sanitize =
     name:

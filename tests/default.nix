@@ -1,8 +1,14 @@
 {
   pkgs,
+  plainLib,
+  ...
 }:
 let
   lib = pkgs.lib;
+
+  # Target package set for ARMv7 with hard-float (Galaxy S4 Mini / postmarketOS)
+  armPkgs = pkgs.pkgsCross.armv7l-hf-multiplatform;
+  qemuArm = pkgs.buildPackages.qemu;
 
   testFiles =
     lib.filesystem.listFilesRecursive ./.
@@ -16,7 +22,7 @@ let
         if builtins.typeOf tests == "list" then
           tests
         else if builtins.typeOf tests == "lambda" then
-          tests { inherit pkgs lib; }
+          tests { inherit pkgs lib plainLib; }
         else
           [ tests ];
       fileName = builtins.baseNameOf (builtins.toString path);
@@ -24,13 +30,75 @@ let
     builtins.map (t: t // { _file = fileName; }) testList
   ) testFiles;
 
-  # ── Stable Test Identifier ──────────────────────────────────
-  # Generates a stable, content-based C++ and filesystem-safe ID
-  # so adding/reordering tests doesn't bust the cache of unchanged tests.
+  # Clean string for Nix store path names: letters, numbers, -, _, .
+  sanitizeDerivName =
+    str:
+    let
+      # Replace spaces, colons, slashes, parens with dashes
+      cleaned =
+        builtins.replaceStrings
+          [
+            " "
+            "/"
+            "\\"
+            ":"
+            "("
+            ")"
+            "["
+            "]"
+            "{"
+            "}"
+            "\""
+            "'"
+            ","
+            "<"
+            ">"
+            "."
+            "+"
+            "|"
+            "="
+            "&"
+            "@"
+          ]
+          [
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+            "-"
+          ]
+          str;
+      # Truncate long descriptions so the store path doesn't exceed Linux filename limits
+      truncated = builtins.substring 0 35 cleaned;
+    in
+    truncated;
+
+  # Generates: <fileName>_<sanitizedDesc>_<shortHash>
+  # e.g.: modules.test.nix_evalModules-pulls-in-all-of-lib_f5e4e5eeb7ec
   mkTestId =
     test:
-    "t_" + builtins.substring 0 12 (builtins.hashString "sha256" "${test._file}:${test.description}");
-
+    let
+      cleanFile = lib.removeSuffix ".test.nix" test._file;
+      cleanDesc = sanitizeDerivName test.description;
+      hash = builtins.substring 0 8 (builtins.hashString "sha256" "${test._file}:${test.description}");
+    in
+    "${cleanFile}_${cleanDesc}_${hash}";
   # ── Eval-time Translation Helper ────────────────────────────
   tryTranslate =
     translate: test:
@@ -59,8 +127,6 @@ let
       };
 
   # ── Generic Isolated Test Derivation ────────────────────────
-  # Builds and runs in parallel, caches per-test, and never fails
-  # the derivation build (logs PASS/FAIL and details to $out).
   mkIsolatedTestDrv =
     {
       backendName,
@@ -74,6 +140,7 @@ let
       name = "wechselbalg-test-${backendName}-${testId}";
       dontUnpack = true;
       inherit nativeBuildInputs buildInputs;
+      dontFixup = true;
       buildPhase = ''
         mkdir -p $out
         echo ${lib.escapeShellArg test.description} > $out/desc
@@ -100,8 +167,6 @@ let
     };
 
   # ── Shared Test Aggregator ──────────────────────────────────
-  # Inspects all individual test outputs, displays logs, and fails
-  # with exit 1 if any test failed.
   mkAggregator =
     { name, testDrvs }:
     let
@@ -135,6 +200,7 @@ let
     pkgs.stdenv.mkDerivation {
       name = "wechselbalg-tests-${name}";
       dontUnpack = true;
+      dontFixup = true;
       buildPhase = ''
         echo "=== Aggregating ${toString (builtins.length testDrvs)} ${name} tests ==="
         ${aggregatorScript} ${lib.concatStringsSep " " (builtins.map (d: "${d}") testDrvs)}
@@ -144,7 +210,7 @@ let
       '';
     };
 
-  # Multi-library C++ linking smoke test for cpp-library
+  # Multi-library C++ linking smoke test for native host
   smokeTestDrv =
     let
       smokeLib1 =
@@ -197,6 +263,78 @@ let
       runScript = ''
         g++ -std=c++23 -O2 ${smokeSrc} -ltestFN -lbase -o test_bin
         ./test_bin
+      '';
+    };
+
+  # Multi-library C++ linking smoke test for ARMv7 via QEMU
+  smokeTestArmv7Drv =
+    let
+      smokeLib1 =
+        (lib.mkCppLibrary {
+          value = {
+            increment = x: x + 1;
+          };
+          namespace = "testFN";
+        }).mkDerivation
+          armPkgs;
+
+      smokeLib2 =
+        (lib.mkCppLibrary {
+          value = {
+            a = 41;
+            b = -1;
+          };
+          namespace = "base";
+        }).mkDerivation
+          armPkgs;
+
+      smokeSrc = pkgs.writeText "smoke-arm.cpp" ''
+        #include <testFN.hpp>
+        #include <base.hpp>
+        #include <iostream>
+
+        int main() {
+          auto r1 = testFN::increment(base::a).asInt();
+          auto r2 = testFN::increment(base::b).asInt();
+          if (r1 != 42 || r2 != 0) {
+            std::cerr << "  increment(41)=" << r1 << ", increment(-1)=" << r2 << std::endl;
+            return 1;
+          }
+          std::cout << "PASS: [armv7l] multi-library linking check (qemu-arm)" << std::endl;
+          return 0;
+        }
+      '';
+    in
+    mkIsolatedTestDrv {
+      backendName = "cpp-library-armv7l";
+      testId = "smoke";
+      test = {
+        description = "[armv7l] multi-library linking check (qemu-arm)";
+      };
+      nativeBuildInputs = [
+        armPkgs.stdenv.cc
+        qemuArm
+      ];
+      buildInputs = [
+        smokeLib1
+        smokeLib2
+      ];
+      runScript = ''
+        # 1. Cross-compile with explicit include & library paths
+        ${armPkgs.stdenv.cc.targetPrefix}g++ -std=c++23 -O2 ${smokeSrc} \
+          -I${smokeLib1}/include \
+          -I${smokeLib2}/include \
+          -L${smokeLib1}/lib \
+          -L${smokeLib2}/lib \
+          -ltestFN -lbase \
+          -o test_bin
+
+        # 2. Set dynamic library path for ARM libstdc++ and generated libs
+        export QEMU_LD_PREFIX="${armPkgs.stdenv.cc.libc}"
+        export QEMU_SET_ENV="LD_LIBRARY_PATH=${armPkgs.stdenv.cc.cc.lib}/armv7l-unknown-linux-gnueabihf/lib:${smokeLib1}/lib:${smokeLib2}/lib"
+
+        # 3. Execute via QEMU user emulation
+        qemu-arm ./test_bin
       '';
     };
 
@@ -459,7 +597,7 @@ let
         };
     };
 
-    # ── Direct C++
+    # ── Direct C++ (Native Host)
     cpp = {
       name = "cpp";
       mkTestDrv =
@@ -518,7 +656,7 @@ let
         };
     };
 
-    # ── C++ Library Mode
+    # ── C++ Library Mode (Native Host)
     cpp-library = {
       name = "cpp-library";
       extraTestDrvs = [ smokeTestDrv ];
@@ -533,7 +671,7 @@ let
               builtins.tryEval (
                 lib.mkCppLibrary {
                   value = {
-                    ${fnName} = test.func;
+                    "testFunction" = test.func;
                   };
                   namespace = "testLib";
                 }
@@ -562,7 +700,7 @@ let
                   try {
                     auto params = ${t.params};
                     auto expected = ${t.expected};
-                    auto result = (testLib::${fnName})(params);
+                    auto result = (testLib::testFunction)(params);
                     if (!(result == expected)) {
                       std::cerr << "  Expected: " << expected.toJSON()
                                 << "\n  Got:      " << result.toJSON() << std::endl;
@@ -603,6 +741,107 @@ let
               '';
         };
     };
+
+    # ── C++ Library Mode for ARMv7 (postmarketOS Galaxy S4 Mini) via QEMU
+    cpp-library-armv7l = {
+      name = "cpp-library-armv7l";
+      extraTestDrvs = [ smokeTestArmv7Drv ];
+      mkTestDrv =
+        { testId, test }:
+        let
+          fnName = testId;
+          t = tryTranslate lib.toCpp test;
+
+          tryLibSpec =
+            if t.success then
+              builtins.tryEval (
+                lib.mkCppLibrary {
+                  value = {
+                    "testFunction" = test.func;
+                  };
+                  namespace = "testLib";
+                }
+              )
+            else
+              { success = false; };
+
+          # Cross-compile the library for armv7l
+          rawLib =
+            if tryLibSpec.success then
+              builtins.tryEval (tryLibSpec.value.mkDerivation armPkgs)
+            else
+              { success = false; };
+
+          generatedLib = if rawLib.success then rawLib.value else null;
+
+          runnerSrc =
+            if !t.success || generatedLib == null then
+              null
+            else
+              pkgs.writeText "runner-armv7l-${testId}.cpp" ''
+                #include <testLib.hpp>
+                #include <iostream>
+                #include <exception>
+
+                int main() {
+                  try {
+                    auto params = ${t.params};
+                    auto expected = ${t.expected};
+                    auto result = (testLib::testFunction)(params);
+                    if (!(result == expected)) {
+                      std::cerr << "  Expected: " << expected.toJSON()
+                                << "\n  Got:      " << result.toJSON() << std::endl;
+                      return 1;
+                    }
+                    std::cout << "PASS: [armv7l] " << ${builtins.toJSON test.description} << std::endl;
+                    return 0;
+                  } catch(const std::exception& e) {
+                    std::cerr << "  Exception: " << e.what() << std::endl;
+                    return 1;
+                  } catch(...) {
+                    std::cerr << "  Unknown exception" << std::endl;
+                    return 1;
+                  }
+                }
+              '';
+        in
+        mkIsolatedTestDrv {
+          backendName = "cpp-library-armv7l";
+          inherit testId test;
+          nativeBuildInputs = [
+            armPkgs.stdenv.cc
+            qemuArm
+          ];
+          buildInputs = lib.optional (generatedLib != null) generatedLib;
+          runScript =
+            if !t.success then
+              ''
+                echo "  Reason: ${t.reason}" >&2
+                exit 1
+              ''
+            else if generatedLib == null then
+              ''
+                echo "  Reason: mkCppLibrary generation failed" >&2
+                exit 1
+              ''
+            else
+              ''
+                # 1. Cross-compile runner on x86_64 host targeting ARMv7
+                ${armPkgs.stdenv.cc.targetPrefix}g++ -std=c++23 -O2 ${runnerSrc} \
+                  -I${generatedLib}/include \
+                  -L${generatedLib}/lib \
+                  -ltestLib \
+                  -o test_bin
+
+                # 2. Run with ARM dynamic linker and standard C++ library paths
+                export QEMU_LD_PREFIX="${armPkgs.stdenv.cc.libc}"
+                export QEMU_SET_ENV="LD_LIBRARY_PATH=${armPkgs.stdenv.cc.cc.lib}/armv7l-unknown-linux-gnueabihf/lib:${generatedLib}/lib"
+
+                qemu-arm ./test_bin
+              '';
+        };
+    };
+
     # ── Rust Backend
     rust = {
       name = "rust";
@@ -652,6 +891,7 @@ let
         };
     };
   };
+
   # ── Construct Backend Aggregator Derivations ────────────────
   mkBackendDrv =
     name: backend:

@@ -19,7 +19,7 @@ let
     in
     if !canEvaluate.success then
       false
-    else if depth > 100 then
+    else if depth > 20 then
       false
     else if
       type == "null" || type == "string" || type == "int" || type == "bool" || type == "float"

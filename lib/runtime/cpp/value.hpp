@@ -8,9 +8,8 @@
 
 #pragma once
 
-#include <array>
-#include <mutex>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -19,6 +18,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -1035,8 +1035,10 @@ inline std::vector<uint8_t> __wb_base64_decode(const std::string &in) {
   static const auto T = []() {
     std::array<int8_t, 256> tbl;
     tbl.fill(-1);
-    const char *chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    for (int i = 0; i < 64; i++) tbl[static_cast<unsigned char>(chars[i])] = i;
+    const char *chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (int i = 0; i < 64; i++)
+      tbl[static_cast<unsigned char>(chars[i])] = i;
     return tbl;
   }();
 
@@ -1044,9 +1046,11 @@ inline std::vector<uint8_t> __wb_base64_decode(const std::string &in) {
   out.reserve((in.size() * 3) / 4);
   int val = 0, valb = -8;
   for (unsigned char c : in) {
-    if (c == '=') break;
+    if (c == '=')
+      break;
     int8_t d = T[c];
-    if (d == -1) continue;
+    if (d == -1)
+      continue;
     val = (val << 6) + d;
     valb += 6;
     if (valb >= 0) {

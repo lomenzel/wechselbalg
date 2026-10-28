@@ -8,7 +8,7 @@
       let
         s = {
           a = params;
-          p = ./paths.test.nix;
+          p = /.;
         };
       in
       s.a;
@@ -20,7 +20,7 @@
     func =
       params:
       let
-        myPath = ./paths.test.nix;
+        myPath = /.;
         f = x: x + 1;
       in
       f params;

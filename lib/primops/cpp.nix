@@ -3,7 +3,7 @@
 # Each is a string of C++ code evaluating to a Value::lambda (curried).
 
 {
-wasm = ''
+  wasm = ''
     Value::lambda([](const Value& config) {
       return Value::lambda([config](const Value& args) -> Value {
         // ScopeGuard helper for RAII cleanup

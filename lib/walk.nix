@@ -31,11 +31,14 @@ let
     depth = 0;
   };
 
-  # Strict fold for accumulator walks. `builtins.foldl'` only forces the
-  # accumulator to WHNF (the outer attribute set), never its inner fields, so
-  # `update acc.defs ...` and `acc.known` build deep thunk chains that cascade-
-  # force on unwind and blow the C++ call stack. This forces the fields we
-  # actually thread through so each step is fully evaluated before the next.
+  reverseList =
+    list:
+    let
+      len = builtins.length list;
+    in
+    builtins.genList (i: builtins.elemAt list (len - 1 - i)) len;
+
+  # Strict fold for accumulator walks. Forces hot fields to prevent thunk cascades.
   foldWalk =
     f: init: list:
     builtins.foldl' (
@@ -68,26 +71,23 @@ let
     ) init list;
 
   # ── Merge helper ────────────────────────────────────────────────
-  # TODO maybe lower this at ir level to simplify backends
-  update = a: b: a // b;
+  update =
+    a: b:
+    if a == { } then
+      b
+    else if b == { } then
+      a
+    else
+      a // b;
 
-  # ── Split defs by hoistability ──────────────────────────────────
-  # Separates defs into { hoistable; local; }.
-  # Hoistable defs (from walkValue — fully self-contained, closure vars
-  # resolved) can safely propagate out of let/lambda scopes.
-  # Local defs (from walkAST — may reference scope-bound variables by
-  # name) must stay in their enclosing scope.
   # ── Split defs by hoistability ──────────────────────────────────
   splitDefs =
     defs:
     let
       names = builtins.attrNames defs;
-
-      # Separate names into hoistable and local
       hoistableNames = builtins.filter (name: defs.${name}._hoistable or false) names;
       localNames = builtins.filter (name: !(defs.${name}._hoistable or false)) names;
 
-      # Build the attrsets flatly to avoid deep '//' Proxy chains in JS
       hoistable = builtins.listToAttrs (
         builtins.map (name: {
           inherit name;
@@ -106,10 +106,6 @@ let
     };
 
   # ── Runtime reify metadata for one hoisted definition ───────────
-  # `ast` is the stripped AST of the lambda; `envIR` evaluates, at the point
-  # the definition is emitted, to the attrset from which the free variables
-  # marked in that AST can be read.  Template captures come from the template
-  # environment, everything else from the enclosing generated scope.
   reifyMeta =
     ast: known:
     let
@@ -140,8 +136,6 @@ let
     };
 
   # ── Walk a reified lambda's parameter list ──────────────────────
-  # Formal defaults are ASTs, so walking them can discover nested lambdas.
-  # Their defs/pending/known must be threaded out, not dropped.
   walkParams =
     arguments: known:
     let
@@ -169,26 +163,28 @@ let
                   r = walkAST f.defaultExpr acc.known;
                 in
                 {
-                  formals = acc.formals ++ [
+                  formals = [
                     {
                       inherit (f) name;
                       hasDefault = true;
                       default = r.ir;
                     }
-                  ];
+                  ]
+                  ++ acc.formals;
                   defs = update acc.defs r.defs;
-                  pending = acc.pending ++ r.pending;
+                  pending = r.pending ++ acc.pending;
                   known = r.known;
                 }
               else
                 {
-                  formals = acc.formals ++ [
+                  formals = [
                     {
                       inherit (f) name;
                       hasDefault = false;
                       default = null;
                     }
-                  ];
+                  ]
+                  ++ acc.formals;
                   inherit (acc) defs pending known;
                 }
             )
@@ -203,14 +199,12 @@ let
       {
         params = {
           inherit identifier ellipsis;
-          inherit (result) formals;
+          formals = reverseList result.formals;
         };
         inherit (result) defs pending known;
       };
 
   # ── Name allocation ─────────────────────────────────────────────
-  # A single monotonic counter in `known` is the only allocator, so names are
-  # unique by construction and allocation is O(1).
   alloc = prefix: known: {
     name = "${prefix}${toString known.counter}";
     known = known // {
@@ -218,8 +212,6 @@ let
     };
   };
 
-  # Mark a top-level binding as actually referenced.  A binding that is never
-  # marked is inlined at its single use site instead of being emitted.
   markUsed =
     name: known:
     known
@@ -229,48 +221,41 @@ let
       };
     };
 
-  # ── Cycle detection over the current walk path ──────────────────
-  # `sameFunction` is scanned only against the in-flight ancestor chain, never
-  # against a global table, so this is O(depth) rather than O(all closures).
   findInFlight =
     fn: funcs:
-    builtins.foldl' (
-      acc: e:
-      if acc != null then
-        acc
-      else if builtins.sameFunction fn e.fn then
-        e.binding
-      else
-        null
-    ) null funcs;
-
-  # ── Instance memo ───────────────────────────────────────────────
-  # Without this, a closure reachable through two different environment
-  # entries is walked once per path, so a shared value *graph* is traversed as
-  # a *tree* — exponential in its depth.
-  #
-  # The memo is bucketed by template key, which is exact syntactic identity,
-  # so a bucket only ever holds instances of one source lambda and the scan is
-  # short.  The cap bounds templates that are instantiated once per data item
-  # (thousands of them, essentially never revisited) and would otherwise make
-  # the scan quadratic; those still terminate via `findInFlight`.
-  instanceCap = 64;
+    let
+      len = builtins.length funcs;
+      go =
+        i:
+        if i >= len then
+          null
+        else
+          let
+            e = builtins.elemAt funcs i;
+          in
+          if builtins.sameFunction fn e.fn then e.binding else go (i + 1);
+    in
+    if funcs == [ ] then null else go 0;
 
   findInstance =
     fn: instances:
-    builtins.foldl' (
-      acc: e:
-      if acc != null then
-        acc
-      else if builtins.sameFunction fn e.fn then
-        e.binding
-      else
-        null
-    ) null instances;
+    let
+      len = builtins.length instances;
+      go =
+        i:
+        if i >= len then
+          null
+        else
+          let
+            e = builtins.elemAt instances i;
+          in
+          if builtins.sameFunction fn e.fn then e.binding else go (i + 1);
+    in
+    if instances == [ ] then null else go 0;
 
-  # Confirm a fingerprint match between two attrsets by comparing the first
-  # function-valued attribute with `sameFunction`.
-  # Returns true / false / null (inconclusive — no comparable attribute).
+  # ── Instance memo ───────────────────────────────────────────────
+  instanceCap = 64;
+
   confirmSameSet =
     a: b:
     builtins.foldl' (
@@ -290,9 +275,6 @@ let
     ) null (builtins.attrNames a);
 
   # ── Resolve one captured environment entry ──────────────────────
-  # `entry.env` is the reified `closureEnvValue` thunk of the root variable;
-  # `entry.path` is the statically narrowed selection below it.
-  # Never lets an unevaluatable capture abort the whole translation.
   resolveCapture =
     entry:
     let
@@ -320,12 +302,18 @@ let
           inherit (r) value;
         };
 
+  # Fast string extractor for fingerprinting without iterating all names
+  extractDistString =
+    v: k:
+    if v ? ${k} then
+      let
+        try = builtins.tryEval (if builtins.isString v.${k} then "${k}=${v.${k}}" else "");
+      in
+      if try.success then try.value else ""
+    else
+      "";
+
   # ── Walk a Nix value (already evaluated) ────────────────────────
-  # seen = {
-  #   sets  : { <fingerprint> = { binding; value; }; }  ancestor attrsets
-  #   funcs : [ { fn; binding; } ]                      ancestor closures
-  #   depth : int                                       safety net
-  # }
   walkValue =
     value: known: seen:
     let
@@ -343,7 +331,6 @@ let
       }
 
     else if (type == "set" || type == "list") && util.JSONOptimizable value then
-      # skip walking of pure JSON-optimizable sets/lists — just emit IR converting it to String literal and parsing at runtime
       {
         ir = ir.primopApp "fromJSON" [ (ir.string (builtins.toJSON value)) ];
         defs = { };
@@ -403,9 +390,9 @@ let
                 r = walkValue elem acc.known seen';
               in
               {
-                elements = acc.elements ++ [ r.ir ];
+                elements = [ r.ir ] ++ acc.elements;
                 defs = update acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
+                pending = r.pending ++ acc.pending;
                 known = r.known;
               }
             )
@@ -418,136 +405,125 @@ let
             value;
       in
       {
-        ir = ir.list result.elements;
+        ir = ir.list (reverseList result.elements);
         inherit (result) defs known pending;
       }
 
     else if type == "set" then
-      let
-        names = builtins.attrNames value;
-        # Build a fingerprint that includes distinguishing string values
-        # (not just key names) to avoid false-positive cycle detection
-        # for structurally similar attrsets (e.g. nixpkgs type objects
-        # all have the same keys but different "name" values).
-        distinguishers = builtins.concatStringsSep "|" (
-          builtins.filter (s: s != "") (
-            builtins.map
-              (
-                n:
-                let
-                  try = builtins.tryEval (if builtins.isString value.${n} then "${n}=${value.${n}}" else "");
-                in
-                if try.success then try.value else ""
-              )
-              (
-                builtins.filter (
-                  n:
-                  builtins.elem n [
-                    "name"
-                    "_type"
-                    "description"
-                  ]
-                ) names
-              )
-          )
-        );
-        rawFingerprint =
-          builtins.concatStringsSep "," names + (if distinguishers != "" then "#${distinguishers}" else "");
-
-        # Hash fingerprints for wide sets (like licenses) to avoid 10KB attribute keys
-        fingerprint =
-          if builtins.length names > 10 then builtins.hashString "sha256" rawFingerprint else rawFingerprint;
-
-        ancestor = seen.sets.${fingerprint} or null;
-        # A fingerprint collision is only evidence; confirm it by comparing a
-        # function-valued attribute.  `null` means we could not tell.
-        confirmed = if ancestor == null then false else confirmSameSet value ancestor.value;
-      in
-      if ancestor != null && confirmed == true then
-        # Genuine cycle confirmed by sameFunction: refer to the shared binding.
+      if value ? drvPath || (value ? type && value.type == "derivation") then
         {
-          ir = ir.ref ancestor.binding;
+          ir = ir.primopApp "throw" [
+            (ir.string "wechselbalg: derivations cannot be translated into target code")
+          ];
           defs = { };
           pending = [ ];
-          known = markUsed ancestor.binding known;
+          inherit known;
         }
       else
         let
-          bindingAlloc = alloc "__wb_cap_" known;
-          binding = bindingAlloc.name;
-          seen' = seen // {
-            depth = seen.depth + 1;
-            sets = seen.sets // {
-              ${fingerprint} = {
-                inherit binding value;
-              };
-            };
-          };
-          result =
-            foldWalk
-              (
-                acc: name:
-                let
-                  tryAttr = builtins.tryEval (builtins.seq value.${name} value.${name});
-                in
-                if !tryAttr.success then
-                  {
-                    # O(1) prepend to list instead of O(N) attrset copying with `//`
-                    entries = [
-                      {
-                        inherit name;
-                        value = ir.primopApp "throw" [
-                          (ir.string "wechselbalg: attribute '${name}' could not be evaluated")
-                        ];
-                      }
-                    ]
-                    ++ acc.entries;
-                    inherit (acc) defs known pending;
-                  }
-                else
-                  let
-                    r = walkValue tryAttr.value acc.known seen';
-                  in
-                  {
-                    # O(1) prepend to list instead of O(N) attrset copying with `//`
-                    entries = [
-                      {
-                        inherit name;
-                        value = r.ir;
-                      }
-                    ]
-                    ++ acc.entries;
-                    defs = update acc.defs r.defs;
-                    pending = acc.pending ++ r.pending;
-                    known = r.known;
-                  }
-              )
-              {
-                entries = [ ]; # Start with empty list
-                defs = { };
-                pending = [ ];
-                known = bindingAlloc.known;
-              }
-              names;
-          # Single O(N) C++ conversion to attribute set at the end
-          attrsIR = ir.attrs (builtins.listToAttrs result.entries);
+          names = builtins.attrNames value;
+          # Fast direct lookup instead of filtering over all names
+          dName = extractDistString value "name";
+          dType = extractDistString value "_type";
+          dDesc = extractDistString value "description";
+          distinguishers = builtins.concatStringsSep "|" (
+            builtins.filter (s: s != "") [
+              dName
+              dType
+              dDesc
+            ]
+          );
+
+          rawFingerprint =
+            builtins.concatStringsSep "," names + (if distinguishers != "" then "#${distinguishers}" else "");
+
+          fingerprint =
+            if builtins.length names > 10 then builtins.hashString "sha256" rawFingerprint else rawFingerprint;
+
+          ancestor = seen.sets.${fingerprint} or null;
+          confirmed = if ancestor == null then false else confirmSameSet value ancestor.value;
         in
-        if result.known.used ? ${binding} then
-          # Something inside referred back to us — materialise the shared binding.
+        if ancestor != null && confirmed == true then
           {
-            ir = ir.ref binding;
-            inherit (result) defs pending;
-            known = result.known // {
-              bindings = result.known.bindings // {
-                ${binding} = attrsIR;
-              };
-            };
+            ir = ir.ref ancestor.binding;
+            defs = { };
+            pending = [ ];
+            known = markUsed ancestor.binding known;
           }
         else
-          {
-            ir = attrsIR;
-            inherit (result) defs known pending;
-          }
+          let
+            bindingAlloc = alloc "__wb_cap_" known;
+            binding = bindingAlloc.name;
+            seen' = seen // {
+              depth = seen.depth + 1;
+              sets = seen.sets // {
+                ${fingerprint} = {
+                  inherit binding value;
+                };
+              };
+            };
+            result =
+              foldWalk
+                (
+                  acc: name:
+                  let
+                    tryAttr = builtins.tryEval (builtins.seq value.${name} value.${name});
+                  in
+                  if !tryAttr.success then
+                    {
+                      entries = [
+                        {
+                          inherit name;
+                          value = ir.primopApp "throw" [
+                            (ir.string "wechselbalg: attribute '${name}' could not be evaluated")
+                          ];
+                        }
+                      ]
+                      ++ acc.entries;
+                      inherit (acc) defs known pending;
+                    }
+                  else
+                    let
+                      r = walkValue tryAttr.value acc.known seen';
+                    in
+                    {
+                      entries = [
+                        {
+                          inherit name;
+                          value = r.ir;
+                        }
+                      ]
+                      ++ acc.entries;
+                      defs = update acc.defs r.defs;
+                      pending = r.pending ++ acc.pending;
+                      known = r.known;
+                    }
+                )
+                {
+                  entries = [ ];
+                  defs = { };
+                  pending = [ ];
+                  known = bindingAlloc.known;
+                }
+                names;
+            attrsIR = ir.attrs (builtins.listToAttrs result.entries);
+          in
+          if result.known.used ? ${binding} then
+            {
+              ir = ir.ref binding;
+              inherit (result) defs pending;
+              known = result.known // {
+                bindings = result.known.bindings // {
+                  ${binding} = attrsIR;
+                };
+              };
+            }
+          else
+            {
+              ir = attrsIR;
+              inherit (result) defs known pending;
+            }
+
     else if type == "lambda" then
       let
         ast = builtins.reify value;
@@ -569,9 +545,9 @@ let
                   r = walkValue arg acc.known (seen // { depth = seen.depth + 1; });
                 in
                 {
-                  args = acc.args ++ [ r.ir ];
+                  args = [ r.ir ] ++ acc.args;
                   defs = update acc.defs r.defs;
-                  pending = acc.pending ++ r.pending;
+                  pending = r.pending ++ acc.pending;
                   known = r.known;
                 }
               )
@@ -584,7 +560,7 @@ let
               ast.value.appliedArgs;
         in
         {
-          ir = ir.primopApp ast.value.primop argsResult.args;
+          ir = ir.primopApp ast.value.primop (reverseList argsResult.args);
           inherit (argsResult) defs known pending;
         }
       else
@@ -592,7 +568,6 @@ let
           inFlight = findInFlight value seen.funcs;
         in
         if inFlight != null then
-          # This exact closure instance is an ancestor of itself: tie the knot.
           {
             ir = ir.ref inFlight;
             defs = { };
@@ -605,7 +580,6 @@ let
             memo = if info.closed then null else findInstance value (known.instances.${info.key} or [ ]);
           in
           if memo != null then
-            # Already walked this exact closure instance elsewhere in the graph.
             {
               ir = ir.ref memo;
               defs = { };
@@ -651,7 +625,6 @@ let
                   ];
             in
             if info.closed then
-              # No captures: the template *is* the value. Zero allocation.
               {
                 ir = ir.ref tplName;
                 defs = { };
@@ -664,9 +637,6 @@ let
                 binding = cloAlloc.name;
                 bucket = known1.instances.${info.key} or [ ];
 
-                # Registered before the environment is walked, so a reference
-                # back to this closure from inside its own environment resolves
-                # to the binding instead of recursing.
                 known2 = cloAlloc.known // {
                   instances = cloAlloc.known.instances // {
                     ${info.key} =
@@ -703,11 +673,15 @@ let
                       in
                       if !resolved.ok then
                         {
-                          entries = acc.entries // {
-                            ${key} = ir.primopApp "throw" [
-                              (ir.string "wechselbalg: captured variable '${key}' could not be translated")
-                            ];
-                          };
+                          entries = [
+                            {
+                              name = key;
+                              value = ir.primopApp "throw" [
+                                (ir.string "wechselbalg: captured variable '${key}' could not be translated")
+                              ];
+                            }
+                          ]
+                          ++ acc.entries;
                           inherit (acc) defs pending known;
                         }
                       else
@@ -715,27 +689,28 @@ let
                           r = walkValue resolved.value acc.known seen';
                         in
                         {
-                          entries = acc.entries // {
-                            ${key} = r.ir;
-                          };
+                          entries = [
+                            {
+                              name = key;
+                              value = r.ir;
+                            }
+                          ]
+                          ++ acc.entries;
                           defs = update acc.defs r.defs;
-                          pending = acc.pending ++ r.pending;
+                          pending = r.pending ++ acc.pending;
                           known = r.known;
                         }
                     )
                     {
-                      entries = { };
+                      entries = [ ];
                       defs = { };
                       pending = newPending;
                       known = known2;
                     }
                     info.envKeys;
 
-                closureIR = ir.closure tplName envResult.entries;
+                closureIR = ir.closure tplName (builtins.listToAttrs envResult.entries);
               in
-              # Always materialised: the memo hands out `ir.ref binding`, and a
-              # stable binding is also what makes runtime `sameFunction` agree
-              # with Nix for a closure reached twice.
               {
                 ir = ir.ref binding;
                 inherit (envResult) defs pending;
@@ -747,9 +722,6 @@ let
               }
 
     else if type == "path" then
-      # Paths are not supported on non-Nix targets — emit a runtime error.
-      # This allows closures containing paths to still be translated as long
-      # as the path itself is not accessed at runtime.
       {
         ir = ir.primopApp "throw" [
           (ir.string "wechselbalg: path '${toString value}' cannot be translated (paths are not supported in target runtime)")
@@ -763,28 +735,15 @@ let
       throw "wechselbalg: unsupported Nix type '${type}'";
 
   # ── Walk a reified AST node ─────────────────────────────────────
-  # This handles the output of builtins.reify — the structural AST
-  # of lambda bodies.  Tries compile-time eval first; falls back to
-  # structural translation.
-  #
-  # `known._env` holds the capture plan of the template currently being
-  # compiled: { param; capture; }.  Free variables are read from it; they are
-  # never resolved through `closureEnvValue`, because the compiled body is
-  # shared by every closure instance of the template.
   walkAST =
     ast: known:
     let
       evalResult = evaluateAST ast;
     in
-    # If the AST can be fully evaluated at Nix eval time, just walk the
-    # resulting value (turns it into IR literals / refs).
     if evalResult.success && builtins.typeOf evalResult.value != "lambda" then
       walkValue evalResult.value known emptySeen
 
     else if ast._expr == "lambda" then
-      # Nested lambda inside a lambda body.  It may reference parameters of the
-      # enclosing lambda, so it is never registered as a shareable template —
-      # it stays a scope-local definition (invariant I6).
       let
         nameAlloc = alloc "__wb_func_" known;
         name = nameAlloc.name;
@@ -812,7 +771,6 @@ let
         }
       else if builtins.hasAttr "closureEnvValue" ast.value then
         if (known._env or null) == null then
-          # Fallback: if walked outside a template, emit direct variable reference
           {
             ir = ir.var ast.value.name;
             defs = { };
@@ -853,9 +811,9 @@ let
                 r = walkAST operand acc.known;
               in
               {
-                parts = acc.parts ++ [ r.ir ];
+                parts = [ r.ir ] ++ acc.parts;
                 defs = update acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
+                pending = r.pending ++ acc.pending;
                 known = r.known;
               }
             )
@@ -868,7 +826,7 @@ let
             ast.value;
       in
       {
-        ir = ir.concatStrings result.parts;
+        ir = ir.concatStrings (reverseList result.parts);
         inherit (result) defs known pending;
       }
     else if ast._expr == "call" && evalResult ? importedFn then
@@ -882,9 +840,9 @@ let
                 r = walkAST arg acc.known;
               in
               {
-                args = acc.args ++ [ r.ir ];
+                args = [ r.ir ] ++ acc.args;
                 defs = update acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
+                pending = r.pending ++ acc.pending;
                 known = r.known;
               }
             )
@@ -897,7 +855,7 @@ let
             evalResult.restArgs;
       in
       {
-        ir = builtins.foldl' (f: a: ir.apply f a) fnR.ir argsResult.args;
+        ir = builtins.foldl' (f: a: ir.apply f a) fnR.ir (reverseList argsResult.args);
         inherit (argsResult) defs known pending;
       }
     else if ast._expr == "call" then
@@ -911,9 +869,9 @@ let
                 r = walkAST arg acc.known;
               in
               {
-                args = acc.args ++ [ r.ir ];
+                args = [ r.ir ] ++ acc.args;
                 defs = update acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
+                pending = r.pending ++ acc.pending;
                 known = r.known;
               }
             )
@@ -924,8 +882,7 @@ let
               known = funcResult.known;
             }
             ast.value.args;
-        # Build nested apply: f(a)(b)(c)
-        appliedIR = builtins.foldl' (fn: arg: ir.apply fn arg) funcResult.ir argsResult.args;
+        appliedIR = builtins.foldl' (fn: arg: ir.apply fn arg) funcResult.ir (reverseList argsResult.args);
       in
       {
         ir = appliedIR;
@@ -991,9 +948,6 @@ let
       }
 
     else if ast._expr == "hasAttr" then
-      # Nix `e ? a.b.c` — check whether the full attribute path exists.
-      # Desugared to: hasAttr "a" e && hasAttr "b" e.a && hasAttr "c" e.a.b
-      # using the existing hasAttr primop (no new IR node needed).
       let
         exprR = walkAST ast.value.expression known;
         pathR =
@@ -1004,9 +958,9 @@ let
                 r = walkAST p acc.known;
               in
               {
-                path = acc.path ++ [ r.ir ];
+                path = [ r.ir ] ++ acc.path;
                 defs = update acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
+                pending = r.pending ++ acc.pending;
                 known = r.known;
               }
             )
@@ -1018,19 +972,20 @@ let
             }
             ast.value.path;
 
-        # Build chained check: hasAttr(p0, e) && hasAttr(p1, e.p0) && ...
+        actualPath = reverseList pathR.path;
+        pathLen = builtins.length actualPath;
         checks = builtins.genList (
           i:
           let
-            elem = builtins.elemAt pathR.path i;
-            prefix = builtins.genList (j: builtins.elemAt pathR.path j) i;
+            elem = builtins.elemAt actualPath i;
+            prefix = builtins.genList (j: builtins.elemAt actualPath j) i;
             base = if prefix == [ ] then exprR.ir else ir.select exprR.ir prefix;
           in
           ir.primopApp "hasAttr" [
             elem
             base
           ]
-        ) (builtins.length pathR.path);
+        ) pathLen;
 
         finalIR = builtins.foldl' (
           acc: check: if acc == null then check else ir.and_ acc check
@@ -1090,7 +1045,6 @@ let
       }
 
     else if ast._expr == "path" then
-      # Paths are not supported on non-Nix targets — emit a runtime error.
       {
         ir = ir.primopApp "throw" [
           (ir.string "wechselbalg: path '${toString ast.value}' cannot be translated (paths are not supported in target runtime)")
@@ -1110,9 +1064,9 @@ let
                 r = walkAST elem acc.known;
               in
               {
-                elements = acc.elements ++ [ r.ir ];
+                elements = [ r.ir ] ++ acc.elements;
                 defs = update acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
+                pending = r.pending ++ acc.pending;
                 known = r.known;
               }
             )
@@ -1125,13 +1079,12 @@ let
             ast.value;
       in
       {
-        ir = ir.list result.elements;
+        ir = ir.list (reverseList result.elements);
         inherit (result) defs known pending;
       }
 
     else if ast._expr == "attrSet" then
       let
-        # ── Walk static attrs ──────────────────────────────────────
         names = builtins.attrNames ast.value.attrs;
         staticResult =
           foldWalk
@@ -1141,27 +1094,28 @@ let
                 r = walkAST ast.value.attrs.${name} acc.known;
               in
               {
-                entries = update acc.entries {
-                  ${name} = r.ir;
-                };
+                entries = [
+                  {
+                    inherit name;
+                    value = r.ir;
+                  }
+                ]
+                ++ acc.entries;
                 defs = update acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
+                pending = r.pending ++ acc.pending;
                 known = r.known;
               }
             )
             {
-              entries = { };
+              entries = [ ];
               defs = { };
               pending = [ ];
               inherit known;
             }
             names;
 
-        # ── Walk dynamic attrs ─────────────────────────────────────
-        # Each dynamic attr has { name = <ast>; value = <ast>; }.
-        # Nix silently drops entries whose name evaluates to null
-        # (e.g. `{ ${null} = 1; }` yields `{}`), so each entry is
-        # wrapped in `if name != null then listToAttrs [...] else {}`.
+        staticEntriesAttrSet = builtins.listToAttrs staticResult.entries;
+
         hasDynamic = ast.value.dynamicAttrs != [ ];
         hasStatic = names != [ ];
         dynamicResult =
@@ -1179,13 +1133,12 @@ let
                     })
                   ])
                 ];
-                # Nix drops dynamic attrs whose name is null — guard each entry
                 guarded = ir.if_ (ir.eq nameR.ir ir.null_) (ir.attrs { }) pair;
               in
               {
-                parts = acc.parts ++ [ guarded ];
+                parts = [ guarded ] ++ acc.parts;
                 defs = update (update acc.defs nameR.defs) valueR.defs;
-                pending = acc.pending ++ nameR.pending ++ valueR.pending;
+                pending = nameR.pending ++ valueR.pending ++ acc.pending;
                 known = valueR.known;
               }
             )
@@ -1197,17 +1150,14 @@ let
             }
             ast.value.dynamicAttrs;
 
-        # Merge all guarded dynamic entries via //
-        dynamicIR = builtins.foldl' ir.update (builtins.head dynamicResult.parts) (
-          builtins.tail dynamicResult.parts
-        );
+        dynParts = reverseList dynamicResult.parts;
+        dynamicIR =
+          if dynParts == [ ] then
+            null
+          else
+            builtins.foldl' ir.update (builtins.head dynParts) (builtins.tail dynParts);
       in
       if ast.value.recursive then
-        # Recursive attrsets: entries can reference each other by name.
-        # Desugar to: let a = expr_a; b = expr_b; in lazyAttrs { a; b; }
-        # The let_ bindings are thunked by the backend, so mutual references
-        # resolve lazily.  The body is a lazy attrset of variable refs.
-        # All defs stay local (they may reference entry-bound variables).
         let
           refs = builtins.listToAttrs (
             builtins.map (name: {
@@ -1223,17 +1173,14 @@ let
           split = splitDefs allDefs;
         in
         {
-          ir = ir.let_ staticResult.entries body split.local;
+          ir = ir.let_ staticEntriesAttrSet body split.local;
           defs = split.hoistable;
           pending = allPending;
           known = finalKnown;
         }
       else
-        # Non-recursive attrset inside a lambda body.
-        # Use lazyAttrs so that entries referencing thunked outer variables
-        # (e.g. from a let-binding or fixed-point) aren't forced prematurely.
         let
-          staticIR = ir.attrs staticResult.entries;
+          staticIR = ir.attrs staticEntriesAttrSet;
           finalIR =
             if hasDynamic && hasStatic then
               ir.update staticIR dynamicIR
@@ -1254,10 +1201,6 @@ let
 
     else if ast._expr == "select" then
       let
-        # Path narrowing.  Mirrors analyze.nix exactly: if the capture plan
-        # decided this root is reached only through static paths, read the
-        # narrowed value straight out of the environment instead of capturing
-        # the whole container.
         sp = analyze.staticPath ast.value.path;
         narrowed =
           if
@@ -1293,9 +1236,9 @@ let
                   r = walkAST p acc.known;
                 in
                 {
-                  path = acc.path ++ [ r.ir ];
+                  path = [ r.ir ] ++ acc.path;
                   defs = update acc.defs r.defs;
-                  pending = acc.pending ++ r.pending;
+                  pending = r.pending ++ acc.pending;
                   known = r.known;
                 }
               )
@@ -1324,7 +1267,10 @@ let
         in
         {
           ir =
-            if hasDefault then ir.selectOr exprR.ir pathR.path defaultR.ir else ir.select exprR.ir pathR.path;
+            if hasDefault then
+              ir.selectOr exprR.ir (reverseList pathR.path) defaultR.ir
+            else
+              ir.select exprR.ir (reverseList pathR.path);
           defs = allDefs;
           pending = allPending;
           known = defaultR.known;
@@ -1348,9 +1294,9 @@ let
                 r = walkValue arg acc.known emptySeen;
               in
               {
-                args = acc.args ++ [ r.ir ];
+                args = [ r.ir ] ++ acc.args;
                 defs = update acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
+                pending = r.pending ++ acc.pending;
                 known = r.known;
               }
             )
@@ -1363,14 +1309,11 @@ let
             ast.value.appliedArgs;
       in
       {
-        ir = ir.primopApp ast.value.primop argsResult.args;
+        ir = ir.primopApp ast.value.primop (reverseList argsResult.args);
         inherit (argsResult) defs known pending;
       }
 
     else if ast._expr == "path" then
-      # Path expressions can't be translated — emit a runtime error
-      # so the rest of the translation proceeds (the path may never
-      # be accessed at runtime).
       {
         ir = ir.primopApp "throw" [
           (ir.string "wechselbalg: path '${builtins.toJSON (ast.value or "unknown")}' cannot be translated")
@@ -1381,11 +1324,6 @@ let
       }
 
     else if ast._expr == "let" then
-      # Nix `let` is always a recursive scope — bindings can reference
-      # each other.  We emit ir.let_ so the backend thunks all bindings.
-      # Scope-dependent defs (from walkAST lambdas — may reference let-bound
-      # variables) stay local.  Hoistable defs (from walkValue — fully
-      # self-contained) propagate out so they're visible from all references.
       let
         attrs = ast.value.attrs.value.attrs;
         names = builtins.attrNames attrs;
@@ -1397,36 +1335,40 @@ let
                 r = walkAST attrs.${name} acc.known;
               in
               {
-                bindings = update acc.bindings {
-                  ${name} = r.ir;
-                };
+                bindings = [
+                  {
+                    inherit name;
+                    value = r.ir;
+                  }
+                ]
+                ++ acc.bindings;
                 defs = update acc.defs r.defs;
-                pending = acc.pending ++ r.pending;
+                pending = r.pending ++ acc.pending;
                 known = r.known;
               }
             )
             {
-              bindings = { };
+              bindings = [ ];
               defs = { };
               pending = [ ];
               inherit known;
             }
             names;
+
+        bindingsAttrSet = builtins.listToAttrs bindingsResult.bindings;
         bodyResult = walkAST ast.value.body bindingsResult.known;
         allDefs = update bindingsResult.defs bodyResult.defs;
         allPending = bindingsResult.pending ++ bodyResult.pending;
         split = splitDefs allDefs;
       in
       {
-        ir = ir.let_ bindingsResult.bindings bodyResult.ir split.local;
-        defs = split.hoistable; # Self-contained defs propagate out
+        ir = ir.let_ bindingsAttrSet bodyResult.ir split.local;
+        defs = split.hoistable;
         pending = allPending;
         known = bodyResult.known;
       }
 
     else if ast._expr == "with" then
-      # 'with' is hard to translate statically — emit a runtime error.
-      # In many cases the enclosing code path is never reached at runtime.
       {
         ir = ir.primopApp "throw" [ (ir.string "wechselbalg: 'with' expressions are not supported") ];
         defs = { };
@@ -1435,7 +1377,6 @@ let
       }
 
     else if ast._expr == "assert" then
-      # assert condition; body → if condition then body else throw "assertion failed"
       let
         condR = walkAST ast.value.condition known;
         bodyR = walkAST ast.value.body condR.known;
@@ -1450,8 +1391,6 @@ let
       }
 
     else
-      # Unknown AST node — emit runtime error instead of compile-time throw
-      # so the rest of the translation proceeds.
       {
         ir = ir.primopApp "throw" [ (ir.string "wechselbalg: unsupported AST node '${ast._expr}'") ];
         defs = { };
@@ -1459,15 +1398,6 @@ let
         inherit known;
       };
 
-  # ── Compile one code template ───────────────────────────────────
-  # Templates are keyed by the stripped AST, so this runs exactly once per
-  # distinct source lambda no matter how many closure instances exist.
-  #
-  # A template with captures is emitted as a curried definition
-  #   <name> = __wb_cenv: <inner>
-  # where `<inner>` is an ordinary local definition holding the real
-  # parameters and body.  That reuses the existing localDefs machinery, keeps
-  # `functionArgs` metadata on the inner lambda, and needs no backend support.
   # ── Compile one code template ───────────────────────────────────
   walkFunctionBody =
     {
@@ -1492,7 +1422,7 @@ let
             };
           };
 
-      # Snapshot state that must not leak out of this function's scope
+      startCounter = known'.counter;
       priorBindings = known'.bindings;
       priorInstances = known'.instances;
       priorUsed = known'.used;
@@ -1501,24 +1431,46 @@ let
       paramsResult = walkParams ast.value.arguments bodyResult.known;
       splitBody = splitDefs (update bodyResult.defs paramsResult.defs);
 
-      # Isolate bindings created strictly inside this function body
-      newBindingNames = builtins.filter (n: !(priorBindings ? ${n})) (
-        builtins.attrNames paramsResult.known.bindings
-      );
-      localBodyBindings = builtins.listToAttrs (
-        builtins.map (n: {
-          name = n;
-          value = paramsResult.known.bindings.${n};
-        }) newBindingNames
-      );
+      hasNewBindings = paramsResult.known.counter != startCounter;
 
-      # If the body created local closures/bindings, wrap the body IR in a let_
+      newBindingNames =
+        if !hasNewBindings then
+          [ ]
+        else
+          let
+            diff = paramsResult.known.counter - startCounter;
+            candidateIndices = builtins.genList (i: startCounter + i) diff;
+            checkIdx =
+              i:
+              let
+                cap = "__wb_cap_${toString i}";
+                clo = "__wb_clo_${toString i}";
+              in
+              if paramsResult.known.bindings ? ${cap} then
+                [ cap ]
+              else if paramsResult.known.bindings ? ${clo} then
+                [ clo ]
+              else
+                [ ];
+          in
+          builtins.concatMap checkIdx candidateIndices;
+
+      localBodyBindings =
+        if newBindingNames == [ ] then
+          { }
+        else
+          builtins.listToAttrs (
+            builtins.map (n: {
+              name = n;
+              value = paramsResult.known.bindings.${n};
+            }) newBindingNames
+          );
+
       scopedBodyIR =
         if localBodyBindings == { } then bodyResult.ir else ir.let_ localBodyBindings bodyResult.ir { };
 
       innerDef = ir.funcDef (paramsResult.params // reifyMeta ast known') scopedBodyIR splitBody.local;
 
-      # The definition the rest of the program refers to by `name`.
       hoisted =
         if template.closed then
           innerDef // { _hoistable = true; }
@@ -1537,12 +1489,16 @@ let
             _hoistable = true;
           };
 
-      # Restore caches so local closures do not leak as unbound refs to other templates
-      cleanedKnown = paramsResult.known // {
-        bindings = priorBindings;
-        instances = priorInstances;
-        used = priorUsed;
-      };
+      cleanedKnown =
+        if !hasNewBindings then
+          paramsResult.known
+        else
+          paramsResult.known
+          // {
+            bindings = priorBindings;
+            instances = priorInstances;
+            used = priorUsed;
+          };
     in
     {
       def = {
@@ -1552,6 +1508,7 @@ let
       known = cleanedKnown;
       pending = (bodyResult.pending or [ ]) ++ paramsResult.pending;
     };
+
   # ── Top-level entry point ───────────────────────────────────────
   walk =
     value:
@@ -1570,14 +1527,12 @@ let
         queue = initial.pending or [ ];
       };
 
-      # Generates a pool of steps. Creating 50,000 ints in Nix takes ~1ms.
       fuel = builtins.genList (x: x) 50000;
 
-      # Driven purely by C++'s for-loop: stack depth is ALWAYS 1.
       finalState = builtins.foldl' (
         state: _i:
         if state.queue == [ ] then
-          state # Queue is empty: fast no-op for remaining fuel
+          state
         else
           let
             item = builtins.head state.queue;
@@ -1612,10 +1567,6 @@ let
       ) initialState fuel;
 
       bindings = finalState.known.bindings;
-
-      # Shared captures and knotted closures become a recursive `let` around
-      # the root expression.  Every backend already forward-declares and thunks
-      # let bindings, so reference cycles resolve without new machinery.
       rootIR = if bindings == { } then finalState.ir else ir.let_ bindings finalState.ir { };
 
       result = {
@@ -1623,29 +1574,6 @@ let
         ir = rootIR;
       };
 
-      report =
-        let
-          numTemplates = toString (builtins.length (builtins.attrNames finalState.known.templates));
-          numDefs = toString (builtins.length (builtins.attrNames finalState.defs));
-          numShared = toString (builtins.length (builtins.attrNames bindings));
-          numAllocated = toString finalState.known.counter;
-        in
-        if finalState.known.counter < 100 then
-          "[Telemetry] templates: ${numTemplates}, defs: ${numDefs}, shared: ${numShared}, names: ${numAllocated}"
-        else
-          ''
-
-            ═════════════ Wechselbalg Template Telemetry ═════════════
-            Code templates   : ${numTemplates}
-            Hoisted defs     : ${numDefs}
-            Shared bindings  : ${numShared}
-            Names allocated  : ${numAllocated}
-            ══════════════════════════════════════════════════════════
-          '';
-
-      # Invariant I4: every ref/var resolves. Catches dangling hoisted
-      # definitions, which otherwise only surface as runtime errors in the
-      # generated target code.
       errors = validate.check result;
       shown = builtins.genList (i: builtins.elemAt errors i) (
         if builtins.length errors > 20 then 20 else builtins.length errors
@@ -1659,7 +1587,6 @@ let
         wechselbalg: internal IR validation failed (${toString (builtins.length errors)} error(s)):
           ${builtins.concatStringsSep "\n  " shown}''
     else
-      # builtins.trace report
       result;
 
 in

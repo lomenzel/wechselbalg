@@ -1,4 +1,4 @@
-{ lib, pkgs }:
+{ lib, pkgs, ... }:
 let
 
   # Compile WAT to base64 on evaluation

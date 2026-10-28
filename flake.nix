@@ -95,6 +95,10 @@
         let
           testsByBackend = import ./tests {
             inherit pkgs;
+            plainLib =
+              (import nixpkgs {
+                inherit system;
+              }).lib;
           };
         in
         testsByBackend
