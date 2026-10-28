@@ -1411,16 +1411,22 @@ let
       template = known.templates.${key};
 
       known' =
-        if template.closed then
-          known // { _env = null; }
-        else
-          known
-          // {
-            _env = {
-              param = envParam;
-              inherit (template) capture;
-            };
-          };
+        (
+          if template.closed then
+            known // { _env = null; }
+          else
+            known
+            // {
+              _env = {
+                param = envParam;
+                inherit (template) capture;
+              };
+            }
+        )
+        // {
+          # Clear instances so this template only memos closures created inside its own body:
+          instances = { };
+        };
 
       startCounter = known'.counter;
       priorBindings = known'.bindings;

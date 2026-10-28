@@ -33,29 +33,35 @@
     {
       #lib = import ./lib;
 
-      overlays.default = final: prev: {
-        lib = prev.lib.extend (
-          lfinal: lprev: {
-            inherit (import ./lib final)
-              toJS
-              toTS
-              toCpp
-              toPython
-              toKotlin
-              toNix
-              toRust
-              mkCppLibrary
-              cppRuntime
-              jsRuntime
-              tsRuntime
-              pythonRuntime
-              kotlinRuntime
-              rustRuntime
-              wasm
-              ;
-          }
-        );
-      };
+      overlays.default =
+        final: prev:
+
+        let
+          importedLib = import ./lib final;
+        in
+        {
+          lib = prev.lib.extend (
+            lfinal: lprev: {
+              inherit (importedLib)
+                toJS
+                toTS
+                toCpp
+                toPython
+                toKotlin
+                toNix
+                toRust
+                mkCppLibrary
+                cppRuntime
+                jsRuntime
+                tsRuntime
+                pythonRuntime
+                kotlinRuntime
+                rustRuntime
+                wasm
+                ;
+            }
+          );
+        };
 
       packages = eachSystem (
         {

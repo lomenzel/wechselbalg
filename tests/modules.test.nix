@@ -1,6 +1,6 @@
-{ plainLib, ... }:
+{ plainLib, lib, ... }:
 let
-  lib = plainLib;
+  # lib = plainLib;
 in
 [
   {
