@@ -14,6 +14,10 @@ let
   walk = import ./walk.nix;
   renderer = import ./render.nix;
 
+  # Capture the capability result, not the entire evaluator namespace (which
+  # also contains volatile currentTime), when the translator is itself compiled.
+  hasReify = builtins.hasAttr "reify" builtins;
+
   backends = rec {
     javascript = import ./backends/javascript.nix;
     typescript = import ./backends/typescript.nix;
@@ -36,7 +40,7 @@ let
     }:
     let
       backend =
-        if !builtins.hasAttr "reify" builtins then
+        if !hasReify then
           throw "wechselbalg: builtins.reify is required. Please use the Nix Fork from github:lomenzel/nix."
         else if builtins.hasAttr lang backends then
           backends.${lang}
@@ -51,6 +55,7 @@ let
     {
       value,
       namespace,
+      compileBatchSize ? 10,
     }:
     let
       walkResult = walk value;
@@ -60,14 +65,14 @@ let
       };
     in
     {
-      inherit namespace;
+      inherit namespace compileBatchSize;
       inherit (rendered) sccUnits;
 
       # Function taking pkgs and returning the final derivation
       mkDerivation =
         pkgsArg:
         (import ./builder.nix { pkgs = pkgsArg; }).buildLibrary {
-          inherit rendered;
+          inherit rendered compileBatchSize;
         };
     }; # Functor version of toCpp:
   #   lib.toCpp value               → attrset coercible to the code string
@@ -90,10 +95,13 @@ let
           if library == null then
             code
           else
-            mkCppLibrary {
-              inherit value;
-              inherit (library) namespace;
-            };
+            mkCppLibrary (
+              {
+                inherit value;
+                inherit (library) namespace;
+              }
+              // builtins.intersectAttrs { compileBatchSize = null; } library
+            );
       };
   };
 

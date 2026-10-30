@@ -1,4 +1,4 @@
-# Incremental Derivation Pipeline for Wechselbalg C++ (Cross-Compilation Ready)
+# Batched Incremental Derivation Pipeline for Wechselbalg C++ (Cross-Compilation Ready)
 
 { pkgs }:
 let
@@ -46,6 +46,7 @@ let
   buildLibrary =
     {
       rendered,
+      compileBatchSize,
     }:
     let
       namespace = rendered.namespace;
@@ -55,37 +56,71 @@ let
       publicHeader = pkgs.writeText "${namespace}.hpp" rendered."include/${namespace}.hpp";
       publicHeaderDir = pkgs.writeTextDir "${namespace}.hpp" rendered."include/${namespace}.hpp";
 
-      # Shared script for compiling individual .o files
-      sccBuilder = pkgs.writeShellScript "wb-compile-scc.sh" ''
-        set -eu
-        export PATH="${nativeCoreutils}:${pkgs.stdenv.cc}/bin"
-        export NIX_HARDENING_ENABLE=""
-        ln -s "$contentPath" "$fileName"
-        ${targetPrefix}g++ ${cxxFlags} -Winvalid-pch -I"$wbInclude" -c "$fileName" -o "$out"
+      # Keep each translation unit small, but compile many in one derivation.
+      sccMakefile = pkgs.writeText "wb-compile-scc.mk" ''
+        SHELL := ${nativeBash}
+        .RECIPEPREFIX := >
+        objects := $(patsubst %.cpp,$(out)/%.o,$(wildcard *.cpp))
+        .PHONY: all
+        all: $(objects)
+
+        $(out)/%.o: %.cpp
+        >${targetPrefix}g++ ${cxxFlags} -Winvalid-pch -I"$(wbInclude)" -c "$<" -o "$@"
       '';
 
-      # a. Individual SCC object file derivations
-      mkSccObject =
-        unit:
-        derivation {
-          name = "wb-scc-${unit.sccHash}.o";
-          # CRITICAL FOR CROSS: Builder runs on buildPlatform, produces code for hostPlatform
+      sccBuilder = pkgs.writeShellScript "wb-compile-scc-batch.sh" ''
+        set -eu
+        export PATH="${nativeCoreutils}:${pkgs.stdenv.cc}/bin:${pkgs.buildPackages.gnumake}/bin"
+        export NIX_HARDENING_ENABLE=""
+        mkdir -p "$out"
+        source "$sourcesPath"
+        jobs="''${NIX_BUILD_CORES:-1}"
+        if [ "$jobs" -eq 0 ]; then jobs=$(nproc); fi
+        make -f ${sccMakefile} -j"$jobs"
+      '';
+
+      # a. Batch unchunked SCCs; chunks of large SCCs compile individually.
+      # Sources pass together, without one writeText derivation per TU.
+      batches = import ./compile-batches.nix {
+        units = rendered.sccUnits;
+        batchSize = compileBatchSize;
+      };
+      sccBatches = builtins.map (batch: {
+        inherit (batch) units;
+        drv = derivation {
+          name = "wb-scc-batch-${batch.id}";
+          # Builder runs on buildPlatform, producing code for hostPlatform.
           system = pkgs.stdenv.buildPlatform.system;
           builder = nativeBash;
           args = [
             "-e"
             sccBuilder
           ];
-          content = unit.content;
-          passAsFile = [ "content" ];
-          fileName = unit.fileName;
+          sources = builtins.concatStringsSep "\n" (
+            builtins.map (
+              unit:
+              "printf '%s' ${pkgs.lib.escapeShellArg unit.content} > ${pkgs.lib.escapeShellArg unit.fileName}"
+            ) batch.units
+          );
+          passAsFile = [ "sources" ];
           inherit wbInclude;
 
           allowSubstitutes = false;
           preferLocalBuild = true;
         };
+      }) batches;
 
-      sccObjects = builtins.map mkSccObject rendered.sccUnits;
+      # Preserve the renderer's original archive member order.
+      objectPaths = builtins.listToAttrs (
+        builtins.concatMap (
+          batch:
+          builtins.map (unit: {
+            name = unit.fileName;
+            value = "${batch.drv}/${pkgs.lib.removeSuffix ".cpp" unit.fileName}.o";
+          }) batch.units
+        ) sccBatches
+      );
+      sccObjects = builtins.map (unit: objectPaths.${unit.fileName}) rendered.sccUnits;
 
       # b. Primops object file derivation
       primopsSrc = rendered."src/_primops.cpp";
@@ -138,6 +173,11 @@ let
         hardeningDisable = [ "all" ];
         buildInputs = [ pkgs.wasmtime ];
         propagatedBuildInputs = [ pkgs.wasmtime ];
+
+        passthru = {
+          inherit compileBatchSize;
+          compileBatches = builtins.map (batch: batch.drv) sccBatches;
+        };
 
         installPhase = ''
           mkdir -p "$out/lib" "$out/include/${namespace}" "$out/include/wechselbalg"

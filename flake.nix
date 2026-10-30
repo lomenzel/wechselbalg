@@ -109,6 +109,8 @@
         in
         testsByBackend
         // {
+          capture-reproducibility = import ./tests/capture-reproducibility.nix { inherit pkgs; };
+          cpp-compile-batches = import ./tests/compile-batches.nix { inherit pkgs; };
           formatting = treefmtEval.${system}.config.build.check self;
         }
       );

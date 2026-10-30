@@ -403,7 +403,12 @@ let
               '';
             in
             {
-              inherit sccHash fileName content;
+              inherit
+                sccHash
+                fileName
+                content
+                isChunked
+                ;
             };
         in
         builtins.genList (i: renderChunk i (builtins.elemAt nameChunks i)) (builtins.length nameChunks);

@@ -99,6 +99,36 @@ int main() {
 }
 ```
 
+Large SCCs are split into C++ translation units of at most 15 definitions.
+Each chunk of a split SCC gets its own compilation derivation and is never
+batched with other chunks or unsplit SCCs.
+
+Only unsplit SCCs are grouped into derivations of at most 10 units by default.
+A binary hierarchy over hashes of their names splits oversized groups;
+inserting or changing an unsplit SCC only invalidates its affected batches,
+rather than shifting every subsequent group. Adding, removing, or changing
+split-SCC chunks does not affect the batching of unsplit SCCs.
+Each batch compiles its units independently and in parallel using `NIX_BUILD_CORES`.
+The runtime precompiled header, primops, root expression, and final thin archive
+remain separate derivations.
+
+Set `compileBatchSize` in the arguments to `lib.mkCppLibrary` to trade cache
+granularity for fewer derivations for unsplit SCCs. It must be a positive integer; `1` restores
+one compilation derivation per translation unit. The same setting is accepted
+inside `library` when using `lib.toCpp value { library = { ... }; }`.
+The resulting derivation exposes `compileBatches` and `compileBatchSize` as
+passthru attributes for inspecting the compilation graph. A change recompiles
+all units in the affected batch, not just the changed unit.
+
+The default is defined only by `mkCppLibrary`; the `toCpp` wrapper forwards
+optional overrides, and the internal builder and batch planner require the
+resolved size explicitly. The library specification also exposes `compileBatchSize`.
+
+Cache stability also depends on closure captures: capturing the entire `builtins`
+set includes volatile values such as `currentTime`. Compute capability checks
+outside translated closures and capture their boolean results instead. Intentional
+captures of `builtins.currentTime` still change the generated code.
+
 Generating Nix is simpler and does not require a runtime:
 
 ```nix
