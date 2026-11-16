@@ -6,6 +6,7 @@ let
     namespace = "batchtest";
   };
   defaultCompileBatchSize = defaultSpec.compileBatchSize;
+  defaultChunkSize = defaultSpec.chunkSize;
   # Direct internal fixtures inherit the public API's default, not their own.
   group = args: import ../lib/compile-batches.nix ({ batchSize = defaultCompileBatchSize; } // args);
   builder = import ../lib/builder.nix { inherit pkgs; };
@@ -89,12 +90,19 @@ let
 
   checks = {
     apiDefault = builtins.isInt defaultCompileBatchSize && defaultCompileBatchSize > 0;
+    chunkApiDefault = defaultChunkSize == 15;
     apiOverride =
       (wb.mkCppLibrary {
         value = { };
         namespace = "batchtest";
         compileBatchSize = 7;
       }).compileBatchSize == 7;
+    chunkApiOverride =
+      (wb.mkCppLibrary {
+        value = { };
+        namespace = "batchtest";
+        chunkSize = 7;
+      }).chunkSize == 7;
     functorDefault =
       (wb.toCpp { } { library.namespace = "batchtest"; }).compileBatchSize == defaultCompileBatchSize;
     functorOverride =
@@ -104,6 +112,13 @@ let
           compileBatchSize = 7;
         };
       }).compileBatchSize == 7;
+    functorChunkOverride =
+      (wb.toCpp { } {
+        library = {
+          namespace = "batchtest";
+          chunkSize = 7;
+        };
+      }).chunkSize == 7;
     builderRequiresExplicitSize = !(builtins.functionArgs builder.buildLibrary).compileBatchSize;
     plannerRequiresExplicitSize =
       !(builtins.functionArgs (import ../lib/compile-batches.nix)).batchSize;

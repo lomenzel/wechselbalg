@@ -99,7 +99,7 @@ int main() {
 }
 ```
 
-Large SCCs are split into C++ translation units of at most 15 definitions.
+Large SCCs are split into C++ translation units of at most 15 definitions by default.
 Each chunk of a split SCC gets its own compilation derivation and is never
 batched with other chunks or unsplit SCCs.
 
@@ -116,6 +116,8 @@ Set `compileBatchSize` in the arguments to `lib.mkCppLibrary` to trade cache
 granularity for fewer derivations for unsplit SCCs. It must be a positive integer; `1` restores
 one compilation derivation per translation unit. The same setting is accepted
 inside `library` when using `lib.toCpp value { library = { ... }; }`.
+Set `chunkSize` similarly to control the maximum definitions per rendered SCC
+translation unit. It defaults to `15` and must be a positive integer.
 The resulting derivation exposes `compileBatches` and `compileBatchSize` as
 passthru attributes for inspecting the compilation graph. A change recompiles
 all units in the affected batch, not just the changed unit.

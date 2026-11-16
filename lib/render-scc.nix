@@ -319,8 +319,14 @@ let
       merkleResult, # Output of merkle.process
       namespace, # C++ namespace, e.g. "my_app"
       value, # Top-level attrset to export
+      chunkSize,
     }:
     let
+      validChunkSize =
+        if !builtins.isInt chunkSize || chunkSize < 1 then
+          throw "wechselbalg: chunkSize must be a positive integer"
+        else
+          chunkSize;
       detailNs = "${namespace}::detail";
       runtimeHpp = builtins.readFile ./runtime/cpp/value.hpp;
 
@@ -328,7 +334,7 @@ let
       renderSccUnit =
         unit:
         let
-          nameChunks = chunkList chunkSize unit.names;
+          nameChunks = chunkList validChunkSize unit.names;
           isChunked = builtins.length nameChunks > 1;
 
           renderChunk =

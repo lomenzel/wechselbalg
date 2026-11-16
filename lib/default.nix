@@ -56,16 +56,17 @@ let
       value,
       namespace,
       compileBatchSize ? 10,
+      chunkSize ? 15,
     }:
     let
       walkResult = walk value;
       merkleResult = merkle.process walkResult;
       rendered = renderScc.render {
-        inherit merkleResult namespace value;
+        inherit merkleResult namespace value chunkSize;
       };
     in
     {
-      inherit namespace compileBatchSize;
+      inherit namespace compileBatchSize chunkSize;
       inherit (rendered) sccUnits;
 
       # Function taking pkgs and returning the final derivation
@@ -100,7 +101,10 @@ let
                 inherit value;
                 inherit (library) namespace;
               }
-              // builtins.intersectAttrs { compileBatchSize = null; } library
+              // builtins.intersectAttrs {
+                compileBatchSize = null;
+                chunkSize = null;
+              } library
             );
       };
   };
