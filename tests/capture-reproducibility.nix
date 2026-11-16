@@ -45,6 +45,40 @@ let
       namespace = "capturetest";
     };
 
+  # Reproducibility of lambda *parameters*: Nix reports a lambda's formals
+  # sorted by interned-symbol id — the order the identifiers happened to be
+  # first parsed in *this evaluation*, which varies between nix invocations.
+  # Without canonicalisation that order leaks into the template key (the
+  # memoisation/caching key walk.nix groups closures by) and into the
+  # generated parameter code of every backend, including the `!ellipsis`
+  # guard (`if (_kv.first != ...` in C++). The output must be
+  # deterministically alphabetical regardless.
+  # The three names below are unique to this file and spelled in scrambled
+  # (non-alphabetical) order, so in *any* evaluation context Nix reports them
+  # in exactly this scrambled order: each assertion genuinely fails without
+  # the corresponding normalisation.
+  formalsScrambled =
+    {
+      xqzWbScrambleZebra,
+      xqzWbScrambleApple,
+      xqzWbScrambleMango ? 3,
+    }:
+    xqzWbScrambleZebra + xqzWbScrambleApple + xqzWbScrambleMango;
+  formalsReversedAST =
+    let
+      ast = builtins.reify formalsScrambled;
+      n = builtins.length ast.value.arguments.formals;
+      reversed = builtins.genList (i: builtins.elemAt ast.value.arguments.formals (n - 1 - i)) n;
+    in
+    ast
+    // {
+      value = ast.value // {
+        arguments = ast.value.arguments // {
+          formals = reversed;
+        };
+      };
+    };
+
   checks = {
     capabilityIsBoolean = translatorCapture.entries.hasReify.env == true;
     builtinNamespaceIsNarrow = translatorCapture.mode.builtins == "narrow";
@@ -62,6 +96,28 @@ let
     stableDerivation =
       toString ((library (capabilityProbe 1)).mkDerivation pkgs)
       == toString ((library (capabilityProbe 2)).mkDerivation pkgs);
+    # The template key must not depend on how the formals were listed:
+    # `formalsReversedAST` is the same AST as `formalsScrambled`'s with the
+    # formals reversed — both must hash to one key.
+    # Exercises the analyze/scan path:
+    formalsKeySpellingStable =
+      (analyze.analyze (builtins.reify formalsScrambled)).key == (analyze.analyze formalsReversedAST).key;
+    # The runtime `reify` metadata (`params.ast`) must be alphabetical —
+    # exercises the analyze/scopedScan path endtoend:
+    formalsAstAlphabetical =
+      builtins.map (f: f.name)
+        (analyze.reifyInfo (builtins.reify formalsScrambled)).stripped.value.arguments.formals == [
+        "xqzWbScrambleApple"
+        "xqzWbScrambleMango"
+        "xqzWbScrambleZebra"
+      ];
+    # The generated code itself must order its per-formal bindings and its
+    # unexpected-argument guard alphabetically — this exercises the
+    # walk/params/backend path. The JS backend inlines the emitted source,
+    # including the guard's allowed-keys list verbatim.
+    formalsCodeAlphabetical = pkgs.lib.strings.hasInfix ("\"xqzWbScrambleApple\", \"xqzWbScrambleMango\", \"xqzWbScrambleZebra\"") (
+      code formalsScrambled
+    );
     intentionalWholeCapture = (captureOf (wholeProbe 1)).mode.builtins == "whole";
     intentionalWholeValueChanges = code (wholeProbe 1) != code (wholeProbe 2);
     intentionalTimeChanges = code (timeProbe 1) != code (timeProbe 2);

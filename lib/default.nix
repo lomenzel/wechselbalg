@@ -62,7 +62,12 @@ let
       walkResult = walk value;
       merkleResult = merkle.process walkResult;
       rendered = renderScc.render {
-        inherit merkleResult namespace value chunkSize;
+        inherit
+          merkleResult
+          namespace
+          value
+          chunkSize
+          ;
       };
     in
     {

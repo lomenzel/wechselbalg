@@ -141,6 +141,10 @@ let
     let
       identifier = arguments.identifier or null;
       ellipsis = if builtins.hasAttr "ellipsis" arguments then arguments.ellipsis else true;
+      # Canonical order (see analyze.canonicalFormals): `reify` reports the
+      # formals in source order, which would otherwise leak into every
+      # backend's parameter bindings and its `!ellipsis` guard code.
+      formals = analyze.canonicalFormals (arguments.formals or [ ]);
     in
     if !(builtins.hasAttr "formals" arguments) then
       {
@@ -194,7 +198,7 @@ let
               pending = [ ];
               inherit known;
             }
-            arguments.formals;
+            formals;
       in
       {
         params = {

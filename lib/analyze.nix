@@ -39,6 +39,24 @@ let
     __pairs = entries;
   };
 
+  # Lambda parameters are a *set of names*: `{ a, b }: e` and `{ b, a }: e`
+  # describe the same function, but Nix reports the formals in the order it
+  # parsed them — sorted by interned-symbol ID (ParserState::validateFormals),
+  # which depends on which identifiers *this nix invocation* happened to intern
+  # first. Across processes the same function is therefore reported as either
+  # `[a b]` or `[b a]`. That order leaks into the template key (this module's
+  # `analyze` hashes the stripped AST — the memoisation key `walk.nix` groups
+  # closures by), into `params.ast` / `params.formals`, and with them into
+  # every backend's emitted parameter handling *and* its `!ellipsis` guard
+  # (`if (_kv.first != "a" && _kv.first != "b") throw ...` in C++): two
+  # compilations of one function would get different cache keys (bad for
+  # caching) and the guard order would vary between builds.
+  # Parameter names are unique per lambda (validate.nix: paramNames), so
+  # sorting by name is total; sorting before scanning also fixes the order in
+  # which default-expressions are walked. Same trick as the sorted name-pair
+  # lists above.
+  canonicalFormals = builtins.sort (a: b: a.name < b.name);
+
   # ── Single pass: strip + collect uses ───────────────────────────
   # Returns { stripped; uses; } where `uses` is a list of
   #   { root = <var name>; path = [ <attr> ] | null; env = <thunk>; }
@@ -380,7 +398,7 @@ let
                 };
                 uses = [ ];
               }
-          ) args.formals
+          ) (canonicalFormals args.formals)
         else
           [ ];
     in
@@ -722,9 +740,10 @@ let
       let
         args = v.arguments;
         hasFormals = builtins.hasAttr "formals" args;
+        rawFormals = if hasFormals then canonicalFormals args.formals else [ ];
         binderNames =
           (if (args.identifier or null) != null then [ args.identifier ] else [ ])
-          ++ (if hasFormals then builtins.map (f: f.name) args.formals else [ ]);
+          ++ (if hasFormals then builtins.map (f: f.name) rawFormals else [ ]);
         bound' = addBound bound binderNames;
         fs =
           if hasFormals then
@@ -748,7 +767,7 @@ let
                   };
                   free = [ ];
                 }
-            ) args.formals
+            ) rawFormals
           else
             [ ];
         b = scopedScan bound' v.body;
@@ -786,7 +805,12 @@ let
 
 in
 {
-  inherit staticPath isFreeVar joinKey;
+  inherit
+    staticPath
+    isFreeVar
+    joinKey
+    canonicalFormals
+    ;
 
   # AST + free-variable set of any lambda node, for runtime `builtins.reify`.
   reifyInfo =
