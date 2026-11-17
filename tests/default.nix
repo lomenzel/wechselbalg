@@ -12,7 +12,7 @@ let
 
   testFiles =
     lib.filesystem.listFilesRecursive ./.
-    |> lib.filter (path: lib.hasSuffix "modules.test.nix" (builtins.toString path));
+    |> lib.filter (path: lib.hasSuffix "test.nix" (builtins.toString path));
 
   allTests = lib.concatMap (
     path:

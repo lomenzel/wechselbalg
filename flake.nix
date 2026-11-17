@@ -107,7 +107,9 @@
               }).lib;
           };
         in
-        testsByBackend
+        {
+          inherit (testsByBackend) javascript cpp-library nix; # other backends currently have no priority
+        }
         // {
           capture-reproducibility = import ./tests/capture-reproducibility.nix { inherit pkgs; };
           cpp-compile-batches = import ./tests/compile-batches.nix { inherit pkgs; };

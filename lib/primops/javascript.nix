@@ -257,7 +257,7 @@
   '';
   split = ''
     Value.lambda(regex => Value.lambda(str => {
-      const re = new RegExp(regex.asString(), "g");
+      const re = new RegExp(Value._translateNixRegex(regex.asString()), "g");
       const s = str.asString();
       const parts = [];
       let lastIndex = 0;
@@ -279,7 +279,7 @@
   '';
   match = ''
     Value.lambda(regex => Value.lambda(str => {
-      const m = str.asString().match(new RegExp("^(?:" + regex.asString() + ")$"));
+      const m = str.asString().match(new RegExp("^(?:" + Value._translateNixRegex(regex.asString()) + ")$"));
       if (!m) return Value.null_();
       return Value.fromList(m.slice(1).map(s => s === undefined ? Value.null_() : Value.fromString(s)));
     }))

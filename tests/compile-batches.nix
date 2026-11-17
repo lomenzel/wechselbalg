@@ -67,6 +67,7 @@ let
     };
   renderedSccs = (import ../lib/render-scc.nix { inherit pkgs; }).render {
     namespace = "metadataTest";
+    chunkSize = defaultChunkSize;
     value = { };
     merkleResult = {
       sccs = builtins.map mkScc [
@@ -110,6 +111,7 @@ let
         library = {
           namespace = "batchtest";
           compileBatchSize = 7;
+          chunkSize = 7;
         };
       }).compileBatchSize == 7;
     functorChunkOverride =
