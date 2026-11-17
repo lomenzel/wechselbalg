@@ -29,9 +29,15 @@ let
         sub = builtins.substring 7 7 str;
       in
       sub == "fromInt"
-      || sub == "fromBoo"
       || sub == "fromStr"
       || sub == "fromFlo"
+      # fromBool must be the EXACT boolean literal. renderEq/renderLessThan
+      # also produce a `Value::fromBool(` prefix around arbitrary (possibly
+      # failing, forward-referencing) operands, which are NOT pure — treating
+      # them as cheap evaluates them eagerly at let-binding init time, before
+      # forward-referenced sibling bindings are assigned (see toIntBase10).
+      || str == "Value::fromBool(true)"
+      || str == "Value::fromBool(false)"
       || str == "Value::null_()"
     else if pfx5 == "__wb_" then
       let
