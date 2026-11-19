@@ -15,6 +15,16 @@ let
 
   listToAttrs = list: builtins.listToAttrs list;
 
+  zipListsWith =
+    f: a: b:
+    if builtins.length a != builtins.length b then
+      throw "wechselbalg eval: zipListsWith length mismatch"
+    else
+      let
+        pair = i: { v = f (builtins.elemAt a i) (builtins.elemAt b i); };
+      in
+      builtins.genList (i: builtins.getAttr "v" (pair i)) (builtins.length a);
+
   eval =
     {
       _expr ? null,
@@ -70,6 +80,11 @@ let
       let
         elementsEval = builtins.map (e: eval e) value;
         success = builtins.all (e: e.success) elementsEval;
+        # A list containing a path element is NOT folded to a plain value:
+        # reify stores path nodes as strings, and `builtins.toPath` returns a
+        # string in the fork nix — so there is no way to rebuild a real path
+        # here. Report failure and let the walker lower each element through
+        # walkPath, which registers the translation-time fs record.
       in
       {
         inherit success;
@@ -100,19 +115,20 @@ let
           success = false;
           value = null;
         }
-      else
+      else if success then
         {
           inherit success;
-          value =
-            if success then
-              listToAttrs (
-                builtins.map (a: {
-                  inherit (a) name;
-                  inherit (a.value) value;
-                }) attrsEval
-              )
-            else
-              null;
+          value = listToAttrs (
+            builtins.map (a: {
+              inherit (a) name;
+              inherit (a.value) value;
+            }) attrsEval
+          );
+        }
+      else
+        {
+          success = false;
+          value = null;
         }
 
     else if _expr == "select" then
@@ -243,25 +259,13 @@ let
           argEval = eval (builtins.head args);
         in
         if argEval.success && (builtins.isPath argEval.value || builtins.isString argEval.value) then
-          let
-            imported = builtins.tryEval (import argEval.value);
-          in
-          if !imported.success then
-            throw "wechselbalg eval: failed to import '${toString argEval.value}'"
-          else if builtins.length args == 1 then
-            {
-              success = true;
-              value = imported.value;
-            }
-          else
-            # Applied to further arguments that may contain free variables:
-            # cannot fold, but the imported function is known statically.
-            {
-              success = false;
-              value = null;
-              importedFn = imported.value;
-              restArgs = builtins.tail args;
-            }
+          {
+            success = false;
+            value = null;
+            pathImport = true;
+            pathValue = argEval.value;
+            restArgs = builtins.tail args;
+          }
         else
           {
             success = false;

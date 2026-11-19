@@ -235,11 +235,25 @@ let
         expr,
         stringDefs ? { },
         stringDefNames ? [ ],
+        bindings ? { },
+        bindingNames ? [ ],
         ...
       }:
       let
         stringDecls = builtins.map (name: "(${name} := ${stringDefs.${name}})") stringDefNames;
-        allDefs = stringDecls ++ defs;
+        # Root value bindings (path/fs records, closures, captured sets — see
+        # `splitRootBindings` in lib/render.nix). Emitted like `renderLet`:
+        # an env dict filling the records, then the names bound as locals so
+        # `renderRef` finds them.
+        envInit = if bindingNames == [ ] then [ ] else [ "(__wb_root_env := {})" ];
+        envAssigns = builtins.map (
+          name:
+          "__wb_root_env.__setitem__(${builtins.toJSON (sanitize name)}, Value.thunk(lambda: ${bindings.${name}}))"
+        ) bindingNames;
+        rootBinds = builtins.map (
+          name: "(${sanitize name} := __wb_root_env[${builtins.toJSON (sanitize name)}])"
+        ) bindingNames;
+        allDefs = stringDecls ++ envInit ++ envAssigns ++ rootBinds ++ defs;
       in
       if allDefs == [ ] then expr else "(lambda: (${join ", " (allDefs ++ [ expr ])})[-1])()";
 

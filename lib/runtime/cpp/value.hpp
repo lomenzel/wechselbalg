@@ -65,6 +65,19 @@ struct Value {
   };
   mutable std::shared_ptr<Meta> _wbMeta;
 
+  // Nix path value: a string carrying the translation-time filesystem record
+  // (a lazy attrset { exists, fileType, content, dir, value }) recorded by
+  // lib/paths.nix during translation. Equality and string conversion behave
+  // like strings so existing primops keep working; typeOf() reports "path".
+  mutable bool _isPath = false;
+  mutable std::shared_ptr<Value> _pathMeta;
+  // Composed-from-a-path tag (`dir + "/x"` built at runtime). The joined
+  // string is exactly what Nix produces, but the translation-time filesystem
+  // record cannot follow a runtime concatenation. Fs lookups on such a value
+  // throw an explicit error naming the operands (spec: composed paths are
+  // unsupported). An empty string means "not composed".
+  mutable std::string _composedDesc;
+
   Value() : type(Type::Null), value(std::monostate{}) {}
 
   // ── Lazy evaluation ───────────────────────────────────────────
@@ -92,6 +105,9 @@ struct Value {
       value = state.result->value;
       _formals = state.result->_formals;
       _wbMeta = state.result->_wbMeta;
+      _isPath = state.result->_isPath;
+      _pathMeta = state.result->_pathMeta;
+      _composedDesc = state.result->_composedDesc;
     }
   }
 
@@ -118,6 +134,63 @@ struct Value {
     Value val(Type::Lambda, std::move(v));
     val._formals = std::move(formals);
     return val;
+  }
+
+  // Nix path value. The target runtime has no access to the filesystem that
+  // existed while translating, so a path carries the translation-time record
+  // (`meta` — a lazy attrset with { exists, fileType, content, dir, value })
+  // attached as hidden fields.
+  static Value fromPath(std::string path, Value meta) {
+    Value v = fromString(std::move(path));
+    v._isPath = true;
+    v._pathMeta = std::make_shared<Value>(std::move(meta));
+    return v;
+  }
+
+  // A string composed from a path at runtime: correct as a string, without a
+  // filesystem record; `desc` names the joined pieces for the error message.
+  static Value composedPath(std::string v, std::string desc) {
+    Value r = fromString(std::move(v));
+    r._composedDesc = std::move(desc);
+    return r;
+  }
+
+  bool isComposedPath() const {
+    force();
+    return !_composedDesc.empty();
+  }
+
+  // A composed string's origin description ("path \"a\" + \"b\""); "" when
+  // this value is not composed. Forces, so it is safe on thunks.
+  std::string composedDescription() const {
+    force();
+    return _composedDesc;
+  }
+
+  bool isPath() const {
+    force();
+    return _isPath;
+  }
+
+  // The meta record is stored as a thunk, so indexing it forces it lazily.
+  const Value &pathMeta() const {
+    force();
+    if (!_composedDesc.empty())
+      throw std::runtime_error("wechselbalg: composed path '" + asString() +
+                               "' has no translation-time filesystem record: "
+                               "it was built by joining " +
+                               _composedDesc +
+                               " at runtime. Composed paths (path + string) "
+                               "are not supported; pass the complete path (a "
+                               "literal, or an attribute holding one) to "
+                               "readFile/readDir/pathExists.");
+    if (!_isPath || !_pathMeta)
+      throw std::runtime_error("wechselbalg: path has no translation-time "
+                               "filesystem record");
+    // The meta binding itself is a thunk (see renderPathValue): force it so
+    // the attrset accessors below see the real record.
+    _pathMeta->force();
+    return *_pathMeta;
   }
 
   // Lazy thunk — transparent lazy evaluation with caching.
@@ -356,7 +429,7 @@ struct Value {
     case Type::Float:
       return "float";
     case Type::String:
-      return "string";
+      return _isPath ? "path" : "string";
     case Type::List:
       return "list";
     case Type::Set:
@@ -1024,8 +1097,26 @@ inline Value __wb_add(const Value &a, const Value &b) {
     return Value::fromInt(a.asInt() + b.asInt());
   if (a.isNumber() && b.isNumber())
     return Value::fromFloat(a.asFloat() + b.asFloat());
-  if (a.isString() && b.isString())
+  if (a.isString() && b.isString()) {
+    // Nix `+` dispatches on the *left* operand: `dir + "/x"` stays a path,
+    // `"text ${dir}"` (string-first, which is what interpolation lowers to)
+    // is an ordinary string. With a path-typed left operand the join is a
+    // *composed path*: the string is correct, but the translation-time
+    // filesystem record cannot follow a runtime concatenation, so the result
+    // is tagged composed-from-a-path and every fs lookup on it throws an
+    // explicit error naming the operands. A string left operand stays an
+    // untagged plain string, exactly like Nix.
+    if (a.isPath() || a.isComposedPath()) {
+      auto side = [](const Value &v) -> std::string {
+        if (v.isComposedPath())
+          return "(" + v.composedDescription() + ")";
+        return "path \"" + v.asString() + "\"";
+      };
+      return Value::composedPath(a.asString() + b.asString(),
+                                 side(a) + " + \"" + b.asString() + "\"");
+    }
     return Value::fromString(a.asString() + b.asString());
+  }
   throw std::runtime_error("wechselbalg: cannot add " + a.typeOf() + " and " +
                            b.typeOf());
 }

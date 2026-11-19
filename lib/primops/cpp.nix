@@ -322,7 +322,58 @@
   isList = "Value::lambda([](const Value& e) { return Value::fromBool(e.isList()); })";
   isAttrs = "Value::lambda([](const Value& e) { return Value::fromBool(e.isAttrs()); })";
   isFunction = "Value::lambda([](const Value& e) { return Value::fromBool(e.isFunction()); })";
-  isPath = "Value::lambda([](const Value&) { return Value::fromBool(false); })";
+  isPath = "Value::lambda([](const Value& e) { return Value::fromBool(e.isPath()); })";
+
+  # Path inspection primops. A translated path carries the translation-time
+  # filesystem record as hidden metadata (see Value::fromPath in the runtime),
+  # so these read against the recorded facts rather than a live filesystem —
+  # the same contract the JavaScript backend implements.
+  pathExists = ''
+    Value::lambda([](const Value& p) -> Value {
+      // A path composed at runtime has no record: per the spec this throws an
+      // explicit error instead of guessing false. Plain strings stay false
+      // (Nix semantics for coercible-but-untranslatable strings).
+      if (p.isPath() || p.isComposedPath()) {
+        return p.pathMeta()["exists"];
+      }
+      return Value::fromBool(false);
+    })
+  '';
+
+  readFileType = ''
+    Value::lambda([](const Value& p) -> Value {
+      if (!p.isPath() && !p.isComposedPath())
+        throw std::runtime_error("wechselbalg: builtins.readFileType expects a path");
+      return p.pathMeta()["fileType"];
+    })
+  '';
+
+  readFile = ''
+    Value::lambda([](const Value& p) -> Value {
+      if (!p.isPath() && !p.isComposedPath())
+        throw std::runtime_error("wechselbalg: builtins.readFile expects a path");
+      return p.pathMeta()["content"];
+    })
+  '';
+
+  readDir = ''
+    Value::lambda([](const Value& p) -> Value {
+      if (!p.isPath() && !p.isComposedPath())
+        throw std::runtime_error("wechselbalg: builtins.readDir expects a path");
+      return p.pathMeta()["dir"];
+    })
+  '';
+
+  # Importing a translated path yields the value that was imported (and
+  # translated) at translation time; paths that could not be imported carry a
+  # throwing placeholder instead.
+  import = ''
+    Value::lambda([](const Value& p) -> Value {
+      if (!p.isPath() && !p.isComposedPath())
+        throw std::runtime_error("wechselbalg: import expects a path");
+      return p.pathMeta()["value"];
+    })
+  '';
 
   functionArgs = "Value::lambda([](const Value& f) -> Value { return f.functionArgs(); })";
 

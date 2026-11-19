@@ -188,6 +188,10 @@ let
       [ ]
     else if t == "primop" then
       [ node.name ]
+    else if t == "path" then
+      collectPrimopsNode node.meta
+    else if t == "pathValue" then
+      [ ]
     else if t == "list" then
       builtins.concatMap collectPrimopsNode node.elements
     else if t == "attrs" then
@@ -270,6 +274,10 @@ let
       [ ]
     else if t == "ref" || t == "var" then
       [ node.name ]
+    else if t == "path" then
+      collectRefs node.meta
+    else if t == "pathValue" then
+      [ node.name ]
     else if t == "list" then
       builtins.concatMap collectRefs node.elements
     else if t == "attrs" then
@@ -320,6 +328,7 @@ let
       namespace, # C++ namespace, e.g. "my_app"
       value, # Top-level attrset to export
       chunkSize,
+      maxUnitBytes ? 1000000, # Max rendered bytes per TU before splitting further
     }:
     let
       validChunkSize =
@@ -327,14 +336,85 @@ let
           throw "wechselbalg: chunkSize must be a positive integer"
         else
           chunkSize;
+      validMaxUnitBytes =
+        if !builtins.isInt maxUnitBytes || maxUnitBytes < 65536 then
+          throw "wechselbalg: maxUnitBytes must be an integer >= 65536"
+        else
+          maxUnitBytes;
       detailNs = "${namespace}::detail";
       runtimeHpp = builtins.readFile ./runtime/cpp/value.hpp;
 
-      # ── 1. Render SCC Units (chunked if > chunkSize symbols) ─────
+      # ── 1. Render SCC Units (chunked if > chunkSize symbols or bytes) ──
       renderSccUnit =
         unit:
         let
-          nameChunks = chunkList validChunkSize unit.names;
+          # Rendered initializer statement per symbol (the dominant term in
+          # the emitted file size — strings, closures, nested data).
+          renderItemInit =
+            name:
+            let
+              item = unit.items.${name};
+            in
+            if item.isFunc then
+              renderDef cppBackend name item.def
+            else
+              "*${name} = Value::thunk([=]() -> Value { return ${renderer.renderNode cppBackend item.expr}; });";
+
+          symDefsLen = 58 + 30 + (builtins.stringLength unit.sccHash);
+          itemBytes = builtins.listToAttrs (
+            builtins.map (name: {
+              name = name;
+              value = builtins.stringLength (renderItemInit name) + symDefsLen;
+            }) unit.names
+          );
+
+          # Partition into runs of at most validMaxUnitBytes rendered bytes.
+          # A symbol that alone exceeds the budget gets its own chunk, so the
+          # invariant is: every chunk except an oversized singleton is <= max.
+          splitByte =
+            builtins.foldl'
+              (
+                acc: name:
+                let
+                  h = builtins.head acc;
+                  b = itemBytes.${name};
+                in
+                if h.bytes + b > validMaxUnitBytes then
+                  [
+                    {
+                      names = [ name ];
+                      bytes = b;
+                    }
+                  ]
+                  ++ acc
+                else
+                  [
+                    {
+                      names = h.names ++ [ name ];
+                      bytes = h.bytes + b;
+                    }
+                  ]
+                  ++ (builtins.tail acc)
+              )
+              [
+                {
+                  names = [ ];
+                  bytes = 0;
+                }
+              ]
+              unit.names;
+
+          # Cap each byte-run at validChunkSize symbols (the original limit).
+          capChunks = chunks: builtins.concatMap (c: chunkList validChunkSize c.names) chunks;
+
+          reverseList =
+            list:
+            let
+              len = builtins.length list;
+            in
+            builtins.genList (i: builtins.elemAt list (len - 1 - i)) len;
+
+          nameChunks = capChunks (reverseList splitByte);
           isChunked = builtins.length nameChunks > 1;
 
           renderChunk =

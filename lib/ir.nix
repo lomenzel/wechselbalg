@@ -28,6 +28,30 @@ rec {
     _t = "null";
   };
 
+  # ── Paths ───────────────────────────────────────────────────────
+  # A Nix path value, resolved to an absolute string at translation time.
+  # `fs` is the translation-time filesystem probe (see paths.nix): it records
+  # what exists, the file content / directory listing, and whether importing
+  # succeeds — everything a target runtime cannot look up itself.
+  # `meta` is an IR attrs node carrying that record lazily at runtime; the
+  # `value` entry of meta is the imported value (or a runtime throw).
+  path = pathStr: meta: {
+    _t = "path";
+    path = pathStr;
+    inherit meta;
+  };
+
+  # A *runtime* path value: a reference to a hoisted `__wb_pmeta_*` meta binding.
+  # Emitted when a Nix path is reached through a value position (parameter,
+  # attribute select…) rather than an inline literal, so the translated program
+  # carries the full path — string and fs record — as one value.
+  # Backends without `renderPathValue` fall back to plain `ref`.
+  pathValue = pathStr: name: {
+    _t = "pathValue";
+    path = pathStr;
+    inherit name;
+  };
+
   # ── Collections ───────────────────────────────────────────────────
   list = elements: {
     _t = "list";

@@ -85,6 +85,17 @@ let
     renderBool = value: "Value.fromBool(${if value then "true" else "false"})";
     renderNull = "Value.null_()";
 
+    # ── Paths ───────────────────────────────────────────────────
+    # A path is a string carrying hidden translation-time metadata (the fs
+    # probe recorded by lib/paths.nix), so eq/add/toString behave like strings
+    # while typeOf()/isPath()/builtins.readFile etc. can consult the record.
+    renderPath = pathStr: metaExpr: "Value.fromPath(${builtins.toJSON pathStr}, ${metaExpr})";
+
+    # A runtime path value reached through a value position (parameter, attr
+    # select): the path string plus its hidden fs record travel as one value.
+    renderPathValue =
+      pathStr: metaName: "Value.fromPath(${builtins.toJSON pathStr}, Value.thunk(() => ${metaName}))";
+
     # ── Collections ─────────────────────────────────────────────
     renderList = elements: "Value.fromList([${join ", " elements}])";
 
@@ -251,11 +262,25 @@ let
         expr,
         stringDefs ? { },
         stringDefNames ? [ ],
+        bindings ? { },
+        bindingNames ? [ ],
         ...
       }:
       let
         stringDecls = builtins.map (name: "let ${name} = ${stringDefs.${name}};") stringDefNames;
-        allDefs = stringDecls ++ defs;
+        # Path/fs records, closures and captured sets the walker hoisted to the
+        # root (`splitRootBindings` in lib/render.nix). Shared function
+        # definitions reference them, so they cannot live in a `let` inside the
+        # program — they join the IIFE scope as one preamble, declared before
+        # the defs and assigned after them, exactly like `renderLet`: defs
+        # reach the records lazily (through thunks), a record's `value` may
+        # reach a def eagerly. Unreachable records were pruned by DCE.
+        bindingDecls =
+          if bindingNames == [ ] then [ ] else [ "let ${join ", " (builtins.map sanitize bindingNames)};" ];
+        bindingAssigns = builtins.map (
+          name: "${sanitize name} = Value.thunk(() => ${bindings.${name}});"
+        ) bindingNames;
+        allDefs = stringDecls ++ bindingDecls ++ defs ++ bindingAssigns;
       in
       if allDefs == [ ] then
         expr

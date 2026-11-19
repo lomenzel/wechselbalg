@@ -28,10 +28,12 @@ let
       || node._t == "string"
       || node._t == "bool"
       || node._t == "null"
-      || node._t == "ref"
       || node._t == "var"
     then
       [ ]
+    else if node._t == "path" then
+      # The meta attrset may contain imported values (functions!).
+      collectNode node.meta
     else if node._t == "list" then
       builtins.concatMap collectNode node.elements
     else if node._t == "attrs" then
@@ -80,11 +82,22 @@ let
   # Walk a set of funcDefs.
   collectDefs = defs: builtins.concatMap (n: collectFuncDef defs.${n}) (builtins.attrNames defs);
 
+  # Root value bindings (`__wb_pmeta_*`, `__wb_clo_*`, captured sets): the
+  # walker hoists them into a root `let` (`walk.nix: rootIR`). They carry
+  # primops and strings the root expression never mentions (a `pathValue`
+  # reference alone does not), so the collection walks them too.
+  collectBindingsNode = bindings: builtins.concatMap collectNode (builtins.attrValues bindings);
+  collectBindingsStrings =
+    bindings: builtins.concatMap collectStringsNode (builtins.attrValues bindings);
+
   # Collect all unique primop names from a walk result.
   collectPrimops =
     walkResult:
     let
-      allNames = collectNode walkResult.ir ++ collectDefs walkResult.defs;
+      allNames =
+        collectNode walkResult.ir
+        ++ collectDefs walkResult.defs
+        ++ collectBindingsNode (walkResult.bindings or { });
     in
     builtins.listToAttrs (
       builtins.map (n: {
@@ -109,6 +122,10 @@ let
       || node._t == "primop"
     then
       [ ]
+    else if node._t == "path" then
+      # The path string itself is not a target-language string literal; the
+      # meta record may contain strings (content, dir entries, ...).
+      collectStringsNode node.meta
     else if node._t == "list" then
       builtins.concatMap collectStringsNode node.elements
     else if node._t == "attrs" then
@@ -163,7 +180,10 @@ let
     # TODO reenable string dedup, its just a test for web-nix to disable it
     ##{};
     let
-      allStrings = collectStringsNode walkResult.ir ++ collectStringsDefs walkResult.defs;
+      allStrings =
+        collectStringsNode walkResult.ir
+        ++ collectStringsDefs walkResult.defs
+        ++ collectBindingsStrings (walkResult.bindings or { });
       grouped = builtins.groupBy (s: s) allStrings;
       candidates = builtins.filter (s: builtins.length grouped.${s} > 1) (builtins.attrNames grouped);
       sorted = builtins.sort (a: b: a < b) candidates;
@@ -184,6 +204,24 @@ let
       backend.renderFloat node.value
     else if node._t == "string" then
       backend.renderString node.value
+    else if node._t == "path" then
+      if builtins.hasAttr "renderPath" backend then
+        backend.renderPath node.path (renderNode backend node.meta)
+      else
+        throw "wechselbalg: backend '${backend.name}' does not implement paths"
+    else if node._t == "pathValue" then
+      # A runtime path value: the string plus its hidden fs record travel as
+      # one value. Backends with a real path type (js, cpp) render it via
+      # renderPathValue. The nix backend re-evaluates on a real evaluator with
+      # filesystem access, so the plain string is enough. Other backends have
+      # no path runtime at all: they carry the bare string and raise when the
+      # fs record would be needed (mirrors an unrecorded path).
+      if builtins.hasAttr "renderPathValue" backend then
+        backend.renderPathValue node.path node.name
+      else if backend.name == "nix" then
+        backend.renderString node.path
+      else
+        backend.renderString node.path
     else if node._t == "bool" then
       backend.renderBool node.value
     else if node._t == "null" then
@@ -287,6 +325,10 @@ let
     node:
     if node._t == "ref" || node._t == "var" then
       [ node.name ]
+    else if node._t == "path" then
+      collectRefs node.meta
+    else if node._t == "pathValue" then
+      [ node.name ]
     else if node._t == "list" then
       builtins.concatMap collectRefs node.elements
     else if node._t == "attrs" then
@@ -334,17 +376,33 @@ let
     in
     fromFormals ++ fromEnv ++ collectRefs def.body ++ fromLocalDefs;
 
-  # Transitive closure of all reachable defs starting from rootIR
-  pruneDefs =
-    rootIR: allDefs:
+  # Transitive closure of all reachable defs *and* root bindings starting
+  # from rootIR. Defs and value bindings live in one global scope (see
+  # `splitRootBindings` and lib/validate.nix): a shared function definition
+  # may select through a path record (`__wb_pmeta_*`), and a path record's
+  # `value` field may embed a closure — the knot must be reached and pruned
+  # as one graph, and every reachable binding must be emitted (the old
+  # def-only reach left emitted-but-rootless path records dangling).
+  pruneDefsAndBindings =
+    rootIR: allDefs: allBindings:
     let
+      refsOf =
+        name:
+        if allDefs ? ${name} then
+          collectDefRefs allDefs.${name}
+        else if allBindings ? ${name} then
+          collectRefs allBindings.${name}
+        else
+          [ ];
       bfs =
         frontier: visited:
         if frontier == [ ] then
           visited
         else
           let
-            validNames = builtins.filter (n: !(visited ? ${n}) && (allDefs ? ${n})) frontier;
+            validNames = builtins.filter (
+              n: !(visited ? ${n}) && (allDefs ? ${n} || allBindings ? ${n})
+            ) frontier;
             newVisited =
               visited
               // builtins.listToAttrs (
@@ -353,13 +411,38 @@ let
                   value = true;
                 }) validNames
               );
-            nextFrontier = builtins.concatMap (n: collectDefRefs allDefs.${n}) validNames;
+            nextFrontier = builtins.concatMap refsOf validNames;
           in
           if validNames == [ ] then visited else bfs nextFrontier newVisited;
 
       reachableSet = bfs (collectRefs rootIR) { };
     in
-    builtins.intersectAttrs reachableSet allDefs;
+    {
+      defs = builtins.intersectAttrs reachableSet allDefs;
+      bindings = builtins.intersectAttrs reachableSet allBindings;
+    };
+
+  # ── Root scope: unpack the walker's root `let` ────────────────
+  # `walk.nix` lowers path/fs records, closures and captured sets as one
+  # mutually referencing knot and wraps the root program in a `let` over it
+  # (`rootIR`). Because *shared* function definitions reference those names
+  # (a function reads `__wb_pmeta_N.value` for an imported file), the knot
+  # cannot live in a `let` nested inside the program — every backend emits
+  # its defs *before* the root expression, outside that let. The renderer
+  # therefore treats the bindings exactly the way lib/validate.nix already
+  # does: defs and root bindings form one global namespace, emitted as a
+  # preamble ahead of all defs. The walker's `walkResult.bindings` and the
+  # root let's bindings are the same set; the split keeps them in sync.
+  splitRootBindings =
+    walkResult':
+    let
+      isRootLet = walkResult'.ir._t == "let" && (walkResult'.ir.localDefs or { }) == { };
+    in
+    {
+      inherit isRootLet;
+      ir = if isRootLet then walkResult'.ir.body else walkResult'.ir;
+      bindings = walkResult'.bindings or { } // (if isRootLet then walkResult'.ir.bindings else { });
+    };
 
   # ── Main entry point ────────────────────────────────────────────
   # Takes a backend and a walk result { ir; defs; } and produces
@@ -369,9 +452,12 @@ let
   prepare =
     backend: walkResult':
     let
-      prunedDefs = pruneDefs walkResult'.ir walkResult'.defs;
+      root = splitRootBindings walkResult';
+      pruned = pruneDefsAndBindings root.ir walkResult'.defs root.bindings;
       walkResult = walkResult' // {
-        defs = prunedDefs;
+        defs = pruned.defs;
+        bindings = pruned.bindings;
+        ir = root.ir;
       };
 
       validationErrors = validate.check walkResult;
@@ -404,6 +490,13 @@ let
         renderedDefs = builtins.map (name: renderDef dedupBackend name walkResult.defs.${name}) defNames;
         renderedExpr = renderNode dedupBackend walkResult.ir;
 
+        # Global value bindings (path/fs records, closures, captured sets):
+        # a preamble emitted by every backend before defs and the root
+        # expression — see splitRootBindings. Values stay IR nodes here;
+        # each backend declares them the way it declares any `let`.
+        bindingNames = builtins.attrNames walkResult.bindings;
+        renderedBindings = builtins.mapAttrs (_: renderNode dedupBackend) walkResult.bindings;
+
         stringDefNames = builtins.sort (a: b: a < b) (builtins.attrValues stringDedup);
         stringDefs = builtins.listToAttrs (
           builtins.map (strValue: {
@@ -417,6 +510,10 @@ let
         inherit defNames;
         expr = renderedExpr;
         inherit usedPrimops stringDefs stringDefNames;
+        # name -> rendered IR expression; `bindingNames` is a deterministic
+        # emission order for backends that emit one unit per name.
+        bindings = renderedBindings;
+        inherit bindingNames;
       };
 
   # Main entry point — returns the rendered program as a single string.

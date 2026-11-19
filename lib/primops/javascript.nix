@@ -205,7 +205,16 @@
   isList = "Value.lambda(e => Value.fromBool(e.isList()))";
   isAttrs = "Value.lambda(e => Value.fromBool(e.isAttrs()))";
   isFunction = "Value.lambda(e => Value.fromBool(e.isFunction()))";
-  isPath = "Value.lambda(e => Value.fromBool(false))";
+  isPath = "Value.lambda(e => Value.fromBool(e.isPath()))";
+
+  # Path consumption. A path value carries the translation-time filesystem
+  # record (see lib/paths.nix); these primops consult it instead of touching
+  # a filesystem that no longer exists.
+  readFile = "Value.lambda(p => p.readPathFile_())";
+  readDir = "Value.lambda(p => p.readPathDir_())";
+  pathExists = "Value.lambda(p => (p.isPath() || p._composedFromPath()) ? p.pathExists_() : Value.fromBool(false))";
+  readFileType = "Value.lambda(p => p.readFileType_())";
+  import = "Value.lambda(p => p.importPath_())";
 
   functionArgs = "Value.lambda(f => f.functionArgs())";
 

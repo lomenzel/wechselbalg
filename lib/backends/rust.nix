@@ -367,6 +367,8 @@ let
         usedPrimops ? { },
         stringDefs ? { },
         stringDefNames ? [ ],
+        bindings ? { },
+        bindingNames ? [ ],
       }:
       let
         usedKnown = builtins.filter (name: builtins.hasAttr name rustPrimopDefs) (
@@ -401,14 +403,44 @@ let
         fwdDecls = builtins.map (
           n: "let ${varToken n} = ::std::rc::Rc::new(::std::cell::RefCell::new(Value::Null));"
         ) defNames;
+
+        # Root value bindings (path/fs records, closures, captured sets — see
+        # `splitRootBindings` in lib/render.nix). Declared and assigned exactly
+        # like `renderLet` does (forward Rc + borrow_mut thunk), but in the
+        # program scope, so function definitions can reference them.
+        bindingFwdDecls = builtins.map (
+          n: "let ${varToken n} = ::std::rc::Rc::new(::std::cell::RefCell::new(Value::Null));"
+        ) bindingNames;
+        bindingAssigns = builtins.map (
+          name:
+          let
+            expr = bindings.${name};
+            freeVars = findFreeVars expr;
+            clones = join "\n" (builtins.map (t: "let ${t} = ::std::rc::Rc::clone(&${t});") freeVars);
+          in
+          if isCheapExpr expr then
+            "*${varToken name}.borrow_mut() = ${expr};"
+          else
+            ''
+              {
+                let __wb_target = ::std::rc::Rc::clone(&${varToken name});
+                ${clones}
+                *__wb_target.borrow_mut() = Value::thunk(move || {
+                  ${expr}
+                });
+              }
+            ''
+        ) bindingNames;
       in
       ''
         {
           ${unknownFactory}
           ${join "\n  " primopDecls}
           ${join "\n  " stringDecls}
+          ${join "\n  " bindingFwdDecls}
           ${join "\n  " fwdDecls}
           ${join "\n  " defs}
+          ${join "\n  " bindingAssigns}
           ${expr}
         }
       '';

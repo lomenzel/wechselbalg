@@ -4,7 +4,7 @@
 # The ultimate meta move: Nix compiling to Nix.
 # Generated code is a bare Nix expression — no runtime needed.
 # Values are plain Nix values (ints, strings, lists, attrsets, lambdas).
-{ lib, pkgs, ... }:
+{ lib, system, ... }:
 let
   join = sep: list: builtins.concatStringsSep sep list;
 
@@ -26,6 +26,7 @@ let
       ];
     in
     if builtins.elem name reserved then "__wb_rsv_${name}" else name;
+  escapeNixString = value: builtins.replaceStrings [ "$" ] [ "\\$" ] (builtins.toJSON value);
 
   backend = {
     name = "nix";
@@ -43,6 +44,14 @@ let
     renderBool = value: if value then "true" else "false";
     renderNull = "null";
 
+    # ── Paths ───────────────────────────────────────────────────
+    # The generated Nix runs on a real evaluator with filesystem access, so a
+    # path lowers back to `builtins.toPath "<abs>"` and the native builtins
+    # (readFile/readDir/import/…) work unchanged. The meta record is ignored:
+    # it exists only for target languages without a translation-time
+    # filesystem.
+    renderPath = pathStr: _metaExpr: "(builtins.toPath ${escapeNixString pathStr})";
+
     # ── Collections ─────────────────────────────────────────────
     renderList = elements: "[ ${join " " elements} ]";
 
@@ -50,7 +59,7 @@ let
     renderAttrs =
       entries:
       let
-        pairs = builtins.map (name: "${builtins.toJSON name} = ${entries.${name}};") (
+        pairs = builtins.map (name: "${escapeNixString name} = ${entries.${name}};") (
           builtins.attrNames entries
         );
       in
@@ -153,7 +162,7 @@ let
               builtins.map (
                 f:
                 if f.hasDefault then
-                  "${sanitize f.name} = if ${theArg} ? ${builtins.toJSON f.name} then ${theArg}.${builtins.toJSON f.name} else ${f.default};"
+                  "${sanitize f.name} = if ${theArg} ? ${escapeNixString f.name} then ${theArg}.${escapeNixString f.name} else ${f.default};"
                 else
                   ""
               ) formals
@@ -177,11 +186,18 @@ let
         expr,
         stringDefs ? { },
         stringDefNames ? [ ],
+        bindings ? { },
+        bindingNames ? [ ],
         ...
       }:
       let
         stringDecls = builtins.map (name: "${name} = ${stringDefs.${name}};") stringDefNames;
-        allDefs = stringDecls ++ defs;
+        # Root value bindings (path/fs records, closures, captured sets — see
+        # `splitRootBindings` in lib/render.nix). Nix `let` is recursive, so
+        # merging them into the program's let is exactly the global scope the
+        # validator assumes.
+        bindingDecls = builtins.map (name: "${sanitize name} = ${bindings.${name}};") bindingNames;
+        allDefs = stringDecls ++ bindingDecls ++ defs;
       in
       if allDefs == [ ] then
         expr
@@ -192,7 +208,7 @@ let
         "let\n${defBlock}\nin ${expr}";
 
     # ── Primops ─────────────────────────────────────────────────
-    primops = import ../primops/nix.nix { inherit lib pkgs; };
+    primops = import ../primops/nix.nix { inherit lib system; };
   };
 
 in

@@ -37,7 +37,33 @@
         final: prev:
 
         let
-          importedLib = import ./lib final;
+
+          inherit (final) runCommand nodejs writeText;
+
+          wasm =
+            let
+              __wasm =
+                a: b:
+                builtins.fromJSON (
+                  builtins.readFile (
+                    runCommand "wasm-thing" { } ''
+                      ${nodejs}/bin/node ${writeText "index.js" ''
+                        ${final.lib.jsRuntime}
+                        const res = ${final.lib.toJS wasm}.call(${final.lib.toJS a}).call(${final.lib.toJS b})
+                        const fs = require('fs');
+                        fs.writeFileSync(process.env.out, res.toJSON_().asString());
+                      ''}
+                    ''
+                  )
+                );
+            in
+            args: input: __wasm args input;
+
+          importedLib = import ./lib {
+            system = final.hostPlatform.system;
+            inherit (final) lib;
+            inherit wasm;
+          };
         in
         {
           lib = prev.lib.extend (
@@ -108,7 +134,12 @@
           };
         in
         {
-          inherit (testsByBackend) javascript cpp-library nix; # other backends currently have no priority
+          inherit (testsByBackend)
+            javascript
+            cpp-library
+            nix
+            cpp-library-armv7l
+            ; # other backends currently have no priority
         }
         // {
           capture-reproducibility = import ./tests/capture-reproducibility.nix { inherit pkgs; };

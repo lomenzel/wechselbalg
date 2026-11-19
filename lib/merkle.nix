@@ -48,6 +48,10 @@ let
       [ ]
     else if t == "ref" || t == "var" then
       [ node.name ]
+    else if t == "path" then
+      collectRefs node.meta
+    else if t == "pathValue" then
+      [ node.name ]
     else if t == "list" then
       builtins.concatMap collectRefs node.elements
     else if t == "attrs" then
@@ -132,6 +136,17 @@ let
       node
     else if t == "ref" || t == "var" then
       if renames ? ${node.name} then node // { name = renames.${node.name}; } else node
+    else if t == "pathValue" then
+      # The pmeta binding is a string literal in the Nix backend; renaming it
+      # would break the literal. Everywhere else it is a real symbol.
+      if builtins.substring 0 6 node.name == "__wb_p" && renames ? ${node.name} then
+        node // { name = renames.${node.name}; }
+      else if renames ? ${node.name} then
+        node // { name = renames.${node.name}; }
+      else
+        node
+    else if t == "path" then
+      node // { meta = sub node.meta; }
     else if t == "closure" then
       let
         newTpl = if renames ? ${node.template} then renames.${node.template} else node.template;
@@ -262,6 +277,24 @@ let
           name = n;
           value = safeNodeForJSON node.entries.${n};
         }) names;
+      }
+    else if t == "pathValue" then
+      # The path string is stable and the binding name is assigned by the
+      # walker; no sub-IR to canonicalise.
+      {
+        _t = "pathValue";
+        path = node.path;
+        name = node.name;
+      }
+    else if t == "path" then
+      # Canonicalise the meta record; the path string itself is stable.
+      let
+        metaSafe = safeNodeForJSON node.meta;
+      in
+      {
+        _t = "path";
+        path = node.path;
+        meta = metaSafe;
       }
     else if t == "closure" then
       let

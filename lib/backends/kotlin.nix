@@ -301,12 +301,22 @@ let
         expr,
         stringDefs ? { },
         stringDefNames ? [ ],
+        bindings ? { },
+        bindingNames ? [ ],
         ...
       }:
       let
         stringDecls = builtins.map (name: "val ${name} = ${stringDefs.${name}}") stringDefNames;
         funcDecls = builtins.map (name: "var ${sanitize name}: Value = Value.null_()") defNames;
-        allDefs = stringDecls ++ funcDecls ++ defs;
+        # Root value bindings (path/fs records, closures, captured sets — see
+        # `splitRootBindings` in lib/render.nix). Declared up front (kotlin
+        # lets the thunks assign them later, so the knot resolves lazily),
+        # exactly as `renderLet` orders its own bindings.
+        bindingDecls = builtins.map (n: "var ${sanitize n}: Value = Value.null_()") bindingNames;
+        bindingAssigns = builtins.map (
+          name: "${sanitize name} = Value.thunk { ${bindings.${name}} }"
+        ) bindingNames;
+        allDefs = stringDecls ++ bindingDecls ++ funcDecls ++ defs ++ bindingAssigns;
       in
       if allDefs == [ ] then
         expr

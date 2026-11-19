@@ -9,9 +9,17 @@
 #
 # This file is the single entry-point. It wires together the walker,
 # renderer, and backends.
-pkgs:
+{
+  system,
+  wasm,
+  lib,
+  ...
+}:
 let
-  walk = import ./walk.nix;
+  # The walker's translation limits use their built-in defaults here; they are
+  # not currently overridable through translate/mkCppLibrary options.
+  defaultPathLimits = { };
+  walk = import ./walk.nix defaultPathLimits;
   renderer = import ./render.nix;
 
   # Capture the capability result, not the entire evaluator namespace (which
@@ -25,8 +33,7 @@ let
     python = import ./backends/python.nix;
     kotlin = import ./backends/kotlin.nix;
     nix = import ./backends/nix.nix {
-      inherit (pkgs) lib;
-      inherit pkgs;
+      inherit lib system;
     };
     rust = import ./backends/rust.nix;
     rs = rust; # convenience alias
@@ -46,20 +53,21 @@ let
           backends.${lang}
         else
           throw "wechselbalg: unknown backend '${lang}'. Available: ${builtins.concatStringsSep ", " (builtins.attrNames backends)}";
-      walkResult = walk value;
+      walkResult = walk backend value;
     in
     renderer.render backend walkResult;
   merkle = import ./merkle.nix;
-  renderScc = import ./render-scc.nix { inherit pkgs; };
+  renderScc = import ./render-scc.nix { };
   mkCppLibrary =
     {
       value,
       namespace,
-      compileBatchSize ? 10,
+      compileBatchSize ? 100,
       chunkSize ? 15,
+      maxUnitBytes ? 1000000,
     }:
     let
-      walkResult = walk value;
+      walkResult = walk backends.cpp value;
       merkleResult = merkle.process walkResult;
       rendered = renderScc.render {
         inherit
@@ -67,11 +75,17 @@ let
           namespace
           value
           chunkSize
+          maxUnitBytes
           ;
       };
     in
     {
-      inherit namespace compileBatchSize chunkSize;
+      inherit
+        namespace
+        compileBatchSize
+        chunkSize
+        maxUnitBytes
+        ;
       inherit (rendered) sccUnits;
 
       # Function taking pkgs and returning the final derivation
@@ -89,7 +103,7 @@ let
     __functor =
       _self: value:
       let
-        code = renderer.render backends.cpp (walk value);
+        code = renderer.render backends.cpp (walk backends.cpp value);
       in
       {
         __toString = _self: code;
@@ -109,6 +123,7 @@ let
               // builtins.intersectAttrs {
                 compileBatchSize = null;
                 chunkSize = null;
+                maxUnitBytes = null;
               } library
             );
       };
@@ -161,27 +176,7 @@ let
   pythonRuntime = builtins.readFile ./runtime/python/value.py;
   kotlinRuntime = builtins.readFile ./runtime/kotlin/Value.kt;
 
-  inherit (pkgs) runCommand nodejs writeText;
-
-  wasm =
-    let
-      __wasm =
-        a: b:
-        builtins.fromJSON (
-          builtins.readFile (
-            runCommand "wasm-thing" { } ''
-              ${nodejs}/bin/node ${writeText "index.js" ''
-                ${jsRuntime}
-                const res = ${toJS wasm}.call(${toJS a}).call(${toJS b})
-                const fs = require('fs');
-                fs.writeFileSync(process.env.out, res.toJSON_().asString());
-              ''}
-            ''
-          )
-        );
-    in
-    args: input: __wasm args input;
-
+  inherit wasm;
 in
 {
   inherit

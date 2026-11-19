@@ -674,6 +674,8 @@ let
                     "testFunction" = test.func;
                   };
                   namespace = "testLib";
+                  # compileBatchSize = 50;
+                  # chunkSize = 12;
                 }
               )
             else
@@ -896,6 +898,11 @@ let
   mkBackendDrv =
     name: backend:
     let
+      backendTests = builtins.filter (
+        t:
+        !(builtins.elem name (t.skipBackends or [ ]))
+        && (!(t ? onlyBackends) || builtins.elem name t.onlyBackends)
+      ) allTests;
       testDrvs =
         builtins.map (
           test:
@@ -903,7 +910,7 @@ let
             testId = mkTestId test;
             inherit test;
           }
-        ) allTests
+        ) backendTests
         ++ (backend.extraTestDrvs or [ ]);
     in
     mkAggregator {

@@ -43,6 +43,16 @@ let
     then
       [ ]
 
+    else if t == "path" then
+      # Paths reference the translation-time filesystem, not a target scope;
+      # their meta record is validated like any other IR subtree.
+      checkNode "${path}.meta" scope node.meta
+
+    else if t == "pathValue" then
+      # The path string is embedded in the node; only the meta binding name
+      # must resolve in scope.
+      if builtins.hasAttr node.name scope then [ ] else [ "${path}: unbound path meta '${node.name}'" ]
+
     else if t == "list" then
       builtins.concatMap (i: checkNode "${path}[${toString i}]" scope (builtins.elemAt node.elements i)) (
         indices node.elements
