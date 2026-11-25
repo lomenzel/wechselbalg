@@ -47,6 +47,7 @@ let
     {
       rendered,
       compileBatchSize,
+      shared,
     }:
     let
       namespace = rendered.namespace;
@@ -168,8 +169,8 @@ let
         pname = "lib${namespace}";
         version = "0.0.1";
         dontUnpack = true;
-        dontStrip = true;
-        dontPatchELF = true;
+        dontStrip = !shared;
+        dontPatchELF = !shared; # IMPORTANT: let fixupPhase set RPATH on the .so
         hardeningDisable = [ "all" ];
         buildInputs = [ pkgs.wasmtime ];
         propagatedBuildInputs = [ pkgs.wasmtime ];
@@ -182,10 +183,19 @@ let
         installPhase = ''
           mkdir -p "$out/lib" "$out/include/${namespace}" "$out/include/wechselbalg"
 
-          # Use $AR instead of hardcoded ar
-          $AR qcsT "$out/lib/lib${namespace}.a" @"${objectsFile}"
+          ${
+            if shared then
+              ''
+                awk '!seen[$0]++' "${objectsFile}" > unique_objects.txt
+                echo "objects: $(wc -l < "${objectsFile}") -> unique: $(wc -l < unique_objects.txt)"
+                $CXX -shared ${cxxFlags} -o "$out/lib/lib${namespace}.so" @unique_objects.txt -lwasmtime
+              ''
+            else
+              ''
+                $AR qcsT "$out/lib/lib${namespace}.a" @"${objectsFile}"
+              ''
+          }
 
-          # Install headers
           cp "${publicHeader}" "$out/include/${namespace}.hpp"
           cp "${wbInclude}/wechselbalg/value.hpp" "$out/include/wechselbalg/value.hpp"
         '';

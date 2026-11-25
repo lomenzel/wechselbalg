@@ -65,6 +65,7 @@ let
       compileBatchSize ? 100,
       chunkSize ? 15,
       maxUnitBytes ? 1000000,
+      shared ? false,
     }:
     let
       walkResult = walk backends.cpp value;
@@ -92,7 +93,7 @@ let
       mkDerivation =
         pkgsArg:
         (import ./builder.nix { pkgs = pkgsArg; }).buildLibrary {
-          inherit rendered compileBatchSize;
+          inherit rendered compileBatchSize shared;
         };
     }; # Functor version of toCpp:
   #   lib.toCpp value               → attrset coercible to the code string
