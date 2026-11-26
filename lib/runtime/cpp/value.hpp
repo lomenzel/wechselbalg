@@ -44,6 +44,8 @@ struct ThunkState {
 struct Value {
   using List = std::vector<Value>;
   using Set = std::unordered_map<std::string, Value>;
+  using ListPtr = std::shared_ptr<const List>;
+  using SetPtr = std::shared_ptr<const Set>;
   using Func = std::function<Value(const Value &)>;
   using ThunkPtr = std::shared_ptr<ThunkState>;
 
@@ -51,8 +53,8 @@ struct Value {
 
   mutable Type type;
   mutable std::variant<std::monostate, bool, long long, double, std::string,
-                       List, Set, Func, ThunkPtr>
-      value;
+                     ListPtr, SetPtr, Func, ThunkPtr>
+    value;
   mutable std::unordered_map<std::string, bool> _formals;
 
   // AST introspection metadata (builtins.reify / builtins.sameFunction).
@@ -120,14 +122,14 @@ struct Value {
   static Value fromString(std::string v) {
     return Value(Type::String, std::move(v));
   }
-  static Value fromList(List v) { return Value(Type::List, std::move(v)); }
+  static Value fromList(List v) { return Value(Type::List,  std::make_shared<const List>(std::move(v))); }
   static Value fromSet(std::initializer_list<std::pair<std::string, Value>> v) {
     Set s;
     for (auto &p : v)
       s[p.first] = p.second;
-    return Value(Type::Set, std::move(s));
+    return fromSet(std::move(s));
   }
-  static Value fromSet(Set v) { return Value(Type::Set, std::move(v)); }
+  static Value fromSet(Set v) { return Value(Type::Set, std::make_shared<const Set>(std::move(v))); }
   static Value lambda(Func v) { return Value(Type::Lambda, std::move(v)); }
   static Value
   lambdaWithFormals(Func v, std::unordered_map<std::string, bool> formals) {
@@ -406,14 +408,14 @@ struct Value {
   const List &asList() const {
     force();
     if (type == Type::List)
-      return std::get<List>(value);
+      return *std::get<ListPtr>(value);
     throw std::runtime_error("wechselbalg: expected list, got " + typeOf());
   }
 
   const Set &asSet() const {
     force();
     if (type == Type::Set)
-      return std::get<Set>(value);
+      return *std::get<SetPtr>(value);
     throw std::runtime_error("wechselbalg: expected set, got " + typeOf());
   }
 
@@ -447,7 +449,7 @@ struct Value {
   Value operator()(const Value &arg) const {
     force();
     if (type == Type::Set) {
-      auto &s = std::get<Set>(value);
+      auto &s = *std::get<SetPtr>(value);
       auto it = s.find("__functor");
       if (it != s.end())
         return it->second(*this)(arg);
@@ -463,7 +465,7 @@ struct Value {
     force();
     if (type != Type::Set)
       throw std::runtime_error("wechselbalg: attribute access on " + typeOf());
-    const auto &s = std::get<Set>(value);
+    const auto &s = *std::get<SetPtr>(value);
     auto it = s.find(key);
     if (it == s.end())
       throw std::runtime_error("wechselbalg: attribute '" + key +
@@ -479,7 +481,7 @@ struct Value {
     force();
     if (type != Type::Set)
       return false;
-    return std::get<Set>(value).count(key) > 0;
+    return std::get<SetPtr>(value)->count(key) > 0;
   }
 
   // ── Comparison ────────────────────────────────────────────────
@@ -505,10 +507,16 @@ struct Value {
       return std::get<double>(value) == std::get<double>(other.value);
     case Type::String:
       return std::get<std::string>(value) == std::get<std::string>(other.value);
-    case Type::List:
-      return std::get<List>(value) == std::get<List>(other.value);
-    case Type::Set:
-      return std::get<Set>(value) == std::get<Set>(other.value);
+    case Type::List: {
+      const auto &ap = std::get<ListPtr>(value);
+      const auto &bp = std::get<ListPtr>(other.value);
+      return ap == bp || *ap == *bp;
+    }
+    case Type::Set: {
+    const auto &ap = std::get<SetPtr>(value);
+      const auto &bp = std::get<SetPtr>(other.value);
+      return ap == bp || *ap == *bp;
+    }
     case Type::Lambda:
       return false;
     }
@@ -535,8 +543,8 @@ struct Value {
     other.force();
     if (type != Type::Set || other.type != Type::Set)
       throw std::runtime_error("wechselbalg: update (//) requires two sets");
-    Set s = std::get<Set>(value);
-    for (const auto &kv : std::get<Set>(other.value))
+    Set s = *std::get<SetPtr>(value);
+    for (const auto &kv : *std::get<SetPtr>(other.value))
       s[kv.first] = kv.second;
     return fromSet(std::move(s));
   }
@@ -547,8 +555,8 @@ struct Value {
     if (type != Type::List || other.type != Type::List)
       throw std::runtime_error("wechselbalg: concat (++) requires two lists");
     List r;
-    const auto &a = std::get<List>(value);
-    const auto &b = std::get<List>(other.value);
+    const auto &a = *std::get<ListPtr>(value);
+    const auto &b = *std::get<ListPtr>(other.value);
     r.reserve(a.size() + b.size());
     r.insert(r.end(), a.begin(), a.end());
     r.insert(r.end(), b.begin(), b.end());
@@ -579,7 +587,7 @@ struct Value {
   long long length() const {
     force();
     if (type == Type::List)
-      return std::get<List>(value).size();
+      return std::get<ListPtr>(value)->size();
     throw std::runtime_error("wechselbalg: length requires a list");
   }
 
@@ -679,7 +687,7 @@ struct Value {
 
   Value removeAttrs(const Value &names) const {
     force();
-    Set s = std::get<Set>(value);
+    Set s = *std::get<SetPtr>(value);
     for (const auto &n : names.asList())
       s.erase(n.asString());
     return fromSet(std::move(s));
@@ -746,7 +754,7 @@ struct Value {
 
   Value sort(const Value &cmp) const {
     force();
-    List r = std::get<List>(value);
+    List r = *std::get<ListPtr>(value);
     std::sort(r.begin(), r.end(), [&](const Value &a, const Value &b) {
       return cmp(a)(b).asBool();
     });
